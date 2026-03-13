@@ -1,0 +1,36 @@
+# Dependencies
+**/node_modules/
+
+# Build outputs
+game_client/dist/
+game_server/build/
+**/coverage/
+**/.vite/
+
+# TypeScript
+**/*.tsbuildinfo
+
+# Environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+**/.DS_Store
+**/Thumbs.db
+
+# Server local/runtime files
+game_server/*.sqlite
+game_server/*.sqlite-shm
+game_server/*.sqlite-wal
+game_server/.colyseus-cloud.json
+game_server/.devmode.json
