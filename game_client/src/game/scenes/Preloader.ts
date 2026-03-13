@@ -1,0 +1,389 @@
+import Phaser from "phaser";
+import {
+  COLORS,
+  KART_STATES,
+  kartKey,
+  TEX_PROJ_ROCKET,
+  TEX_PROJ_BOMB,
+  TEX_PROJ_BULLET,
+  TEX_EXPLOSION_ROCKET,
+  TEX_EXPLOSION_BOMB,
+  TEX_IMPACT_BULLET,
+  TEX_IMPACT_GROUND,
+  TEX_DAMAGE_FLASH,
+  TEX_PICKUP_ROCKET,
+  TEX_PICKUP_BOMB,
+  TEX_PICKUP_BULLET,
+  TEX_PICKUP_GLOW,
+  TEX_PARTICLE_SMOKE,
+  TEX_PARTICLE_SPARK,
+  TEX_PARTICLE_DUST,
+  TEX_PARTICLE_EXHAUST,
+  TEX_TILESET,
+  TEX_HUD_HEALTH,
+  TEX_HUD_WEAPON_SLOT,
+  TEX_HUD_KILL_ICON,
+  TEX_HUD_DEATH_ICON,
+  TEX_HUD_MINIMAP_KART,
+  TEX_HUD_COUNTDOWN,
+  TEX_HUD_BET_BADGE,
+  TEX_HUD_MARKET_ICON,
+  TEX_TITLE_LOGO,
+  TEX_BG_FAR,
+  TEX_BG_MID,
+  ANIM_EXPLOSION_ROCKET,
+  ANIM_EXPLOSION_BOMB,
+  ANIM_IMPACT_BULLET,
+  ANIM_IMPACT_GROUND,
+  ANIM_PICKUP_GLOW,
+  ANIM_BOMB_SPIN,
+  ANIM_SMOKE,
+  ANIM_SPARK,
+  ANIM_DUST,
+  ANIM_EXHAUST,
+  ANIM_COUNTDOWN,
+  animDeath,
+  animRespawn,
+} from "../spriteKeys";
+import { AUDIO_ASSETS, isAudioEnabled } from "../audio";
+
+/**
+ * Preloader scene — loads all sprite assets, creates animations,
+ * then transitions to MainMenu.
+ */
+export class Preloader extends Phaser.Scene {
+  constructor() {
+    super("Preloader");
+  }
+
+  preload(): void {
+    // ── Progress bar ──
+    const barBg = this.add.rectangle(400, 225, 600, 20, 0x1e1e2a);
+    const bar = this.add.rectangle(400 - 300, 225, 0, 16, 0xe5ff00);
+    bar.setOrigin(0, 0.5);
+
+    this.load.on("progress", (p: number) => {
+      bar.width = 596 * p;
+    });
+
+    // ── Kart sheets (36-dir rotation, 96×96 cell, 9×4 grid = 864×384 px) ──
+    for (const color of COLORS) {
+      for (const state of KART_STATES) {
+        const key = kartKey(color, state);
+        this.load.spritesheet(key, `sprites/karts/${key}.png`, {
+          frameWidth: 96,
+          frameHeight: 96,
+        });
+      }
+    }
+
+    // ── Projectiles ──
+    this.load.spritesheet(
+      TEX_PROJ_ROCKET,
+      "sprites/projectiles/projectile_rocket.png",
+      {
+        frameWidth: 32,
+        frameHeight: 32,
+      },
+    );
+    this.load.spritesheet(
+      TEX_PROJ_BOMB,
+      "sprites/projectiles/projectile_bomb.png",
+      {
+        frameWidth: 22,
+        frameHeight: 22,
+      },
+    );
+    this.load.spritesheet(
+      TEX_PROJ_BULLET,
+      "sprites/projectiles/projectile_bullet.png",
+      {
+        frameWidth: 16,
+        frameHeight: 16,
+      },
+    );
+
+    // ── VFX ──
+    this.load.spritesheet(
+      TEX_EXPLOSION_ROCKET,
+      "sprites/vfx/explosion_rocket.png",
+      {
+        frameWidth: 64,
+        frameHeight: 64,
+      },
+    );
+    this.load.spritesheet(
+      TEX_EXPLOSION_BOMB,
+      "sprites/vfx/explosion_bomb.png",
+      {
+        frameWidth: 80,
+        frameHeight: 80,
+      },
+    );
+    this.load.spritesheet(TEX_IMPACT_BULLET, "sprites/vfx/impact_bullet.png", {
+      frameWidth: 16,
+      frameHeight: 16,
+    });
+    this.load.spritesheet(TEX_IMPACT_GROUND, "sprites/vfx/impact_ground.png", {
+      frameWidth: 24,
+      frameHeight: 24,
+    });
+    this.load.image(TEX_DAMAGE_FLASH, "sprites/vfx/damage_flash.png");
+
+    // ── Death / Respawn ──
+    for (const color of COLORS) {
+      this.load.spritesheet(
+        `death_spin_${color}`,
+        `sprites/death_respawn/death_spin_${color}.png`,
+        {
+          frameWidth: 96,
+          frameHeight: 96,
+        },
+      );
+      this.load.spritesheet(
+        `respawn_appear_${color}`,
+        `sprites/death_respawn/respawn_appear_${color}.png`,
+        {
+          frameWidth: 96,
+          frameHeight: 96,
+        },
+      );
+    }
+
+    // ── Pickups ──
+    this.load.image(TEX_PICKUP_ROCKET, "sprites/pickups/pickup_rocket.png");
+    this.load.image(TEX_PICKUP_BOMB, "sprites/pickups/pickup_bomb.png");
+    this.load.image(TEX_PICKUP_BULLET, "sprites/pickups/pickup_bullet.png");
+    this.load.spritesheet(
+      TEX_PICKUP_GLOW,
+      "sprites/pickups/pickup_glow_pulse.png",
+      {
+        frameWidth: 32,
+        frameHeight: 32,
+      },
+    );
+
+    // ── Particles ──
+    this.load.spritesheet(
+      TEX_PARTICLE_SMOKE,
+      "sprites/particles/particle_smoke.png",
+      {
+        frameWidth: 8,
+        frameHeight: 8,
+      },
+    );
+    this.load.spritesheet(
+      TEX_PARTICLE_SPARK,
+      "sprites/particles/particle_spark.png",
+      {
+        frameWidth: 8,
+        frameHeight: 8,
+      },
+    );
+    this.load.spritesheet(
+      TEX_PARTICLE_DUST,
+      "sprites/particles/particle_dust.png",
+      {
+        frameWidth: 8,
+        frameHeight: 8,
+      },
+    );
+    this.load.spritesheet(
+      TEX_PARTICLE_EXHAUST,
+      "sprites/particles/particle_exhaust.png",
+      {
+        frameWidth: 8,
+        frameHeight: 8,
+      },
+    );
+
+    // ── Tileset ──
+    this.load.spritesheet(TEX_TILESET, "sprites/tileset/tileset_arena.png", {
+      frameWidth: 16,
+      frameHeight: 16,
+    });
+
+    // ── HUD ──
+    this.load.image(TEX_HUD_HEALTH, "sprites/hud/hud_health_bar.png");
+    this.load.image(TEX_HUD_WEAPON_SLOT, "sprites/hud/hud_weapon_slot.png");
+    this.load.image(TEX_HUD_KILL_ICON, "sprites/hud/hud_kill_icon.png");
+    this.load.image(TEX_HUD_DEATH_ICON, "sprites/hud/hud_death_icon.png");
+    this.load.spritesheet(
+      TEX_HUD_MINIMAP_KART,
+      "sprites/hud/hud_minimap_kart.png",
+      {
+        frameWidth: 6,
+        frameHeight: 6,
+      },
+    );
+    this.load.spritesheet(
+      TEX_HUD_COUNTDOWN,
+      "sprites/hud/hud_countdown_numbers.png",
+      {
+        frameWidth: 32,
+        frameHeight: 48,
+      },
+    );
+    this.load.image(TEX_HUD_BET_BADGE, "sprites/hud/hud_bet_badge.png");
+    this.load.image(TEX_HUD_MARKET_ICON, "sprites/hud/hud_market_icon.png");
+
+    // ── Title / Background ──
+    this.load.image(TEX_TITLE_LOGO, "sprites/ui/title_logo.png");
+    this.load.image(TEX_BG_FAR, "sprites/ui/background_arena_far.png");
+    this.load.image(TEX_BG_MID, "sprites/ui/background_arena_mid.png");
+
+    // ── Audio (optional; gated by VITE_ENABLE_AUDIO) ──
+    if (isAudioEnabled()) {
+      for (const asset of AUDIO_ASSETS) {
+        this.load.audio(asset.key, asset.sources);
+      }
+    }
+  }
+
+  create(): void {
+    this.createAnimations();
+    this.scene.start("MainMenu");
+  }
+
+  /* ── Create all shared animations ── */
+  private createAnimations(): void {
+    // VFX
+    this.anims.create({
+      key: ANIM_EXPLOSION_ROCKET,
+      frames: this.anims.generateFrameNumbers(TEX_EXPLOSION_ROCKET, {
+        start: 0,
+        end: 7,
+      }),
+      frameRate: 16,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_EXPLOSION_BOMB,
+      frames: this.anims.generateFrameNumbers(TEX_EXPLOSION_BOMB, {
+        start: 0,
+        end: 9,
+      }),
+      frameRate: 14,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_IMPACT_BULLET,
+      frames: this.anims.generateFrameNumbers(TEX_IMPACT_BULLET, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 20,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_IMPACT_GROUND,
+      frames: this.anims.generateFrameNumbers(TEX_IMPACT_GROUND, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 12,
+      repeat: 0,
+    });
+
+    // Pickups
+    this.anims.create({
+      key: ANIM_PICKUP_GLOW,
+      frames: this.anims.generateFrameNumbers(TEX_PICKUP_GLOW, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 4,
+      repeat: -1,
+      yoyo: true,
+    });
+
+    // Bomb projectile spin
+    this.anims.create({
+      key: ANIM_BOMB_SPIN,
+      frames: this.anims.generateFrameNumbers(TEX_PROJ_BOMB, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 8,
+      repeat: -1,
+    });
+
+    // Particles
+    this.anims.create({
+      key: ANIM_SMOKE,
+      frames: this.anims.generateFrameNumbers(TEX_PARTICLE_SMOKE, {
+        start: 0,
+        end: 5,
+      }),
+      frameRate: 10,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_SPARK,
+      frames: this.anims.generateFrameNumbers(TEX_PARTICLE_SPARK, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 14,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_DUST,
+      frames: this.anims.generateFrameNumbers(TEX_PARTICLE_DUST, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 8,
+      repeat: 0,
+    });
+
+    this.anims.create({
+      key: ANIM_EXHAUST,
+      frames: this.anims.generateFrameNumbers(TEX_PARTICLE_EXHAUST, {
+        start: 0,
+        end: 2,
+      }),
+      frameRate: 12,
+      repeat: -1,
+    });
+
+    // Countdown
+    this.anims.create({
+      key: ANIM_COUNTDOWN,
+      frames: this.anims.generateFrameNumbers(TEX_HUD_COUNTDOWN, {
+        start: 0,
+        end: 3,
+      }),
+      frameRate: 1,
+      repeat: 0,
+    });
+
+    // Death / Respawn per color
+    for (const color of COLORS) {
+      this.anims.create({
+        key: animDeath(color),
+        frames: this.anims.generateFrameNumbers(`death_spin_${color}`, {
+          start: 0,
+          end: 11,
+        }),
+        frameRate: 16,
+        repeat: 0,
+      });
+
+      this.anims.create({
+        key: animRespawn(color),
+        frames: this.anims.generateFrameNumbers(`respawn_appear_${color}`, {
+          start: 0,
+          end: 7,
+        }),
+        frameRate: 10,
+        repeat: 0,
+      });
+    }
+  }
+}
