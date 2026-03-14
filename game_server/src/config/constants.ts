@@ -43,7 +43,7 @@ export const GAME = {
   READY_DEBOUNCE_MS: 500,
 
   // Yellow Network
-  YELLOW_APP_ID: "kartfall_v1",
+  YELLOW_APP_ID: "APP-067D-2932",
 } as const;
 
 /** Error codes sent to clients */

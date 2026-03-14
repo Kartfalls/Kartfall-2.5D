@@ -22,16 +22,7 @@ interface LobbyScreenProps {
   profile?: PlayerProfile | null;
   profileLoading?: boolean;
   onUpdateProfileName?: (name: string) => Promise<PlayerProfile | null>;
-  yellowStatus?: {
-    stakingAvailable: boolean;
-    clearnodeReachable: boolean;
-    platformConfigured: boolean;
-    playerBalance: string;
-    asset: string;
-    chainId: number | null;
-    walletAddress: string;
-  } | null;
-  yellowLoading?: boolean;
+  onOpenProfile?: () => void;
 }
 
 export function LobbyScreen({
@@ -43,8 +34,7 @@ export function LobbyScreen({
   profile,
   profileLoading,
   onUpdateProfileName,
-  yellowStatus,
-  yellowLoading,
+  onOpenProfile,
 }: LobbyScreenProps) {
   const [name, setName] = useState("");
   const [roomCode, setRoomCode] = useState("");
@@ -67,11 +57,7 @@ export function LobbyScreen({
     return () => clearInterval(id);
   }, []);
 
-  const playerBalanceNum = yellowStatus?.playerBalance
-    ? Number.parseFloat(yellowStatus.playerBalance)
-    : 0;
-  const stakingSupported = yellowStatus?.stakingAvailable ?? false;
-  const stakeAffordable = playerBalanceNum >= (gameMode === "staked" ? stakeAmount : 0);
+  const assetSymbol = "TOKEN";
 
   const renderKartFrame = (scale: number) => {
     const frameX = (spinFrame % KART_SPRITE_COLS) * KART_SPRITE_W * scale;
@@ -130,6 +116,7 @@ export function LobbyScreen({
     }
   };
 
+
   return (
     <div className="sk-lobby">
       {/* ── Background ── */}
@@ -166,6 +153,16 @@ export function LobbyScreen({
             )}
           </div>
         </div>
+        {authenticated && onOpenProfile && (
+          <button
+            className="btn lov-btn-ready"
+            type="button"
+            onClick={onOpenProfile}
+            style={{ width: "100%", marginTop: 10 }}
+          >
+            Wallet & Balances
+          </button>
+        )}
 
         {/* Game Mode */}
         <div className="sk-card">
@@ -179,19 +176,7 @@ export function LobbyScreen({
             </button>
             <button
               className={`sk-mode-opt sk-mode-staked ${gameMode === "staked" ? "active" : ""}`}
-              onClick={() => {
-                if (!stakingSupported) return;
-                setGameMode("staked");
-              }}
-              disabled={!stakingSupported}
-              title={
-                stakingSupported
-                  ? ""
-                  : yellowLoading
-                    ? "Checking staking availability..."
-                    : "Staking unavailable (clearnode or platform key not ready)"
-              }
-              style={{ opacity: stakingSupported ? 1 : 0.6, cursor: stakingSupported ? "pointer" : "not-allowed" }}
+              onClick={() => setGameMode("staked")}
             >
               💎 Staked
             </button>
@@ -207,21 +192,15 @@ export function LobbyScreen({
                 onChange={(e) => setStakeAmount(Number(e.target.value))}
                 placeholder="Amount"
               />
-              <span className="sk-stake-currency">USDC</span>
+              <span className="sk-stake-currency">
+                {assetSymbol.toUpperCase()}
+              </span>
             </div>
           )}
           {gameMode === "staked" && (
             <div style={{ fontSize: 11, color: "var(--grey)", marginTop: 8 }}>
-              {yellowLoading
-                ? "Checking staking readiness..."
-                : stakingSupported
-                  ? `Wallet channel balance: ${playerBalanceNum.toFixed(2)}`
-                  : "Staking is not available right now."}
-              {stakingSupported && !stakeAffordable && (
-                <div style={{ color: "var(--danger)" }}>
-                  Not enough channel balance for this stake amount.
-                </div>
-              )}
+              Staked matches reserve off-chain balance and settle after the
+              match. You can redeem winnings in your Profile.
             </div>
           )}
         </div>
@@ -260,9 +239,7 @@ export function LobbyScreen({
           />
         </div>
 
-        <div className="sk-hero-kart">
-          {renderKartFrame(1.5)}
-        </div>
+        <div className="sk-hero-kart">{renderKartFrame(1.5)}</div>
 
         {/* Big Play Button */}
         {authenticated && (
@@ -270,9 +247,7 @@ export function LobbyScreen({
             className="sk-play-btn"
             onClick={handlePlay}
             disabled={
-              !name.trim() ||
-              isConnecting ||
-              (gameMode === "staked" && (!stakingSupported || !stakeAffordable))
+              !name.trim() || isConnecting
             }
           >
             <span className="sk-play-icon">▶</span>
@@ -327,12 +302,16 @@ export function LobbyScreen({
 
         {/* Stats / Features */}
         <div className="sk-card">
-          <div className="sk-card-title">{authenticated ? "YOUR STATS" : "FEATURES"}</div>
+          <div className="sk-card-title">
+            {authenticated ? "YOUR STATS" : "FEATURES"}
+          </div>
           {authenticated && profile ? (
             <>
               <div className="sk-feature">🎯 {profile.totalKills} Kills</div>
               <div className="sk-feature">🏆 {profile.totalWins} Wins</div>
-              <div className="sk-feature">🏎️ {profile.totalGames} Games Played</div>
+              <div className="sk-feature">
+                🏎️ {profile.totalGames} Games Played
+              </div>
             </>
           ) : (
             <>

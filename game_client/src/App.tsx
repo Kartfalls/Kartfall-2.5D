@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { PhaserGame } from "./game/PhaserGame";
 import { LobbyScreen } from "./ui/LobbyScreen";
 import { LoadingScreen } from "./ui/LoadingScreen";
@@ -10,15 +10,21 @@ import { BettingPanel } from "./ui/BettingPanel";
 import { Leaderboard } from "./ui/Leaderboard";
 import { useKartfallRoom } from "./net/useRoom";
 import { useProfile } from "./net/useProfile";
-import { useYellowStatus } from "./net/useYellowStatus";
+import { ProfileScreen } from "./ui/ProfileScreen";
 import type { Room } from "@colyseus/sdk";
 import { EventBus } from "./game/EventBus";
 import { EscapeMenu } from "./ui/EscapeMenu";
 
 const KART_COLORS = ["yellow", "red", "purple", "black"] as const;
 
+type WalletOption = {
+  address: string;
+  label: string;
+};
+
 export default function App() {
-  const { ready, authenticated, login, getAccessToken } = usePrivy();
+  const { ready, authenticated, login, getAccessToken, user } = usePrivy();
+  const { wallets } = useWallets();
   const [token, setToken] = useState<string | null>(null);
   const [joinOptions, setJoinOptions] = useState<{
     name: string;
@@ -26,6 +32,7 @@ export default function App() {
     isSpectator?: boolean;
     gameMode?: string;
     stakeAmount?: number;
+    walletAddress?: string;
   } | null>(null);
 
   // Fetch a fresh Privy access token whenever the user is authenticated
@@ -45,12 +52,90 @@ export default function App() {
     updateName,
     refresh: refreshProfile,
   } = useProfile(token);
-  const {
-    status: yellowStatus,
-    loading: yellowLoading,
-  } = useYellowStatus(token);
 
+  const walletOptions = useMemo(() => {
+    const options: WalletOption[] = [];
+    const seen = new Set<string>();
+    const embedded = user?.wallet?.address;
+    const formatAddress = (address: string) =>
+      `${address.slice(0, 6)}...${address.slice(-4)}`;
+    const addOption = (address: string, label: string) => {
+      const key = address.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push({ address, label });
+    };
+
+    if (embedded) {
+      addOption(embedded, `Embedded (${formatAddress(embedded)})`);
+    }
+
+    let externalIndex = 1;
+    wallets?.forEach((wallet) => {
+      if (!wallet?.address) return;
+      const isEmbedded =
+        embedded && wallet.address.toLowerCase() === embedded.toLowerCase();
+      if (isEmbedded) {
+        addOption(
+          wallet.address,
+          `Embedded (${formatAddress(wallet.address)})`,
+        );
+      } else {
+        addOption(
+          wallet.address,
+          `External ${externalIndex++} (${formatAddress(wallet.address)})`,
+        );
+      }
+    });
+
+    return options;
+  }, [user?.wallet?.address, wallets]);
+
+  const [selectedWalletAddress, setSelectedWalletAddress] = useState<
+    string | null
+  >(() => {
+    try {
+      return localStorage.getItem("kartfall_wallet_address");
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (!walletOptions.length) {
+      setSelectedWalletAddress(null);
+      return;
+    }
+    if (!selectedWalletAddress) {
+      setSelectedWalletAddress(walletOptions[0].address);
+      return;
+    }
+    const exists = walletOptions.some(
+      (opt) =>
+        opt.address.toLowerCase() === selectedWalletAddress.toLowerCase(),
+    );
+    if (!exists) {
+      setSelectedWalletAddress(walletOptions[0].address);
+    }
+  }, [walletOptions, selectedWalletAddress]);
+
+  const handleSelectWallet = useCallback((next: string) => {
+    setSelectedWalletAddress(next);
+    try {
+      localStorage.setItem("kartfall_wallet_address", next);
+    } catch {
+      // ignore storage failures
+    }
+  }, []);
+
+  const activeWalletAddress =
+    selectedWalletAddress ||
+    walletOptions[0]?.address ||
+    wallets?.[0]?.address ||
+    (ready && authenticated ? user?.wallet?.address : null) ||
+    null;
   const [showEscapeMenu, setShowEscapeMenu] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
 
   const handleJoin = useCallback(
     async (
@@ -62,9 +147,16 @@ export default function App() {
     ) => {
       // Persist the selected name before creating/joining
       await updateName(name);
-      setJoinOptions({ name, roomCode, isSpectator, gameMode, stakeAmount });
+      setJoinOptions({
+        name,
+        roomCode,
+        isSpectator,
+        gameMode,
+        stakeAmount,
+        walletAddress: activeWalletAddress ?? undefined,
+      });
     },
-    [updateName],
+    [updateName, activeWalletAddress],
   );
 
   const handleLeave = useCallback(() => {
@@ -73,6 +165,7 @@ export default function App() {
     setJoinOptions(null);
     void refreshProfile();
   }, [room, refreshProfile]);
+
 
   // Ensure any "return-to-menu" event (from Phaser scenes or UI)
   // also triggers a clean React-side leave.
@@ -106,59 +199,85 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [room, phase]);
 
-  // ── Pre-join: show lobby/join screen ──
-  if (!ready || (authenticated && token === null)) {
-    return <LoadingScreen />;
-  }
+  // ── Profile Overlay Toggle ──
+  useEffect(() => {
+    const handleOpenProfile = () => setShowProfile(true);
+    EventBus.on("hud-profile", handleOpenProfile);
+    return () => {
+      EventBus.off("hud-profile", handleOpenProfile);
+    };
+  }, []);
 
-  if (!room) {
+
+  const baseContent = (() => {
+    if (!ready || (authenticated && token === null)) {
+      return <LoadingScreen />;
+    }
+    if (!room) {
+      return (
+        <LobbyScreen
+          onJoin={handleJoin}
+          error={error ?? profileError ?? undefined}
+          isConnecting={!!joinOptions && !error}
+          authenticated={!!(ready && authenticated)}
+          onLogin={login}
+          profile={profile}
+          profileLoading={profileLoading}
+          onUpdateProfileName={updateName}
+          onOpenProfile={() => setShowProfile(true)}
+        />
+      );
+    }
     return (
-      <LobbyScreen
-        onJoin={handleJoin}
-        error={error ?? profileError ?? undefined}
-        isConnecting={!!joinOptions && !error}
-        authenticated={!!(ready && authenticated)}
-        onLogin={login}
-        profile={profile}
-        profileLoading={profileLoading}
-        onUpdateProfileName={updateName}
-        yellowStatus={yellowStatus}
-        yellowLoading={yellowLoading}
-      />
-    );
-  }
+      <div style={{ width: "100%", height: "100%", position: "relative" }}>
+        <PhaserGame room={room as Room} />
 
-  // ── In-room: Phaser game + overlays ──
+        {phase === "lobby" && (
+          <LobbyOverlay
+            room={room as Room}
+            onLeave={handleLeave}
+          />
+        )}
+
+        {phase === "countdown" && <CountdownOverlay room={room as Room} />}
+
+        {phase === "playing" && (
+          <>
+            <GameHUD room={room as Room} />
+            <BettingPanel room={room as Room} />
+            {showEscapeMenu && (
+              <EscapeMenu
+                room={room as Room}
+                onLeave={handleLeave}
+                onResume={() => setShowEscapeMenu(false)}
+              />
+            )}
+          </>
+        )}
+
+        {phase === "finished" && (
+          <ResultsScreen room={room as Room} onLeave={handleLeave} />
+        )}
+
+        <Leaderboard room={room as Room} />
+      </div>
+    );
+  })();
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <PhaserGame room={room as Room} />
-
-      {phase === "lobby" && (
-        <LobbyOverlay room={room as Room} onLeave={handleLeave} />
+      {baseContent}
+      {showProfile && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 1000 }}>
+          <ProfileScreen
+            onBack={() => setShowProfile(false)}
+            accessToken={token}
+            walletOptions={walletOptions}
+            selectedWalletAddress={activeWalletAddress}
+            onSelectWallet={handleSelectWallet}
+          />
+        </div>
       )}
-
-      {phase === "countdown" && <CountdownOverlay room={room as Room} />}
-
-      {phase === "playing" && (
-        <>
-          <GameHUD room={room as Room} />
-          {/* BettingPanel only shows for spectators — handled internally */}
-          <BettingPanel room={room as Room} />
-          {showEscapeMenu && (
-            <EscapeMenu
-              room={room as Room}
-              onLeave={handleLeave}
-              onResume={() => setShowEscapeMenu(false)}
-            />
-          )}
-        </>
-      )}
-
-      {phase === "finished" && (
-        <ResultsScreen room={room as Room} onLeave={handleLeave} />
-      )}
-
-      <Leaderboard room={room as Room} />
     </div>
   );
 }
@@ -176,11 +295,18 @@ interface PlayerInfo {
   colorIndex: number;
 }
 
-function LobbyOverlay({ room, onLeave }: { room: Room; onLeave: () => void }) {
+function LobbyOverlay({
+  room,
+  onLeave,
+}: {
+  room: Room;
+  onLeave: () => void;
+}) {
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [roomCode, setRoomCode] = useState("");
   const [gameMode, setGameMode] = useState("free");
   const [myReady, setMyReady] = useState(false);
+  const [stakeError, setStakeError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -224,6 +350,15 @@ function LobbyOverlay({ room, onLeave }: { room: Room; onLeave: () => void }) {
 
     room.onStateChange(handler);
 
+    room.onMessage("stake_required", (data: any) => {
+      const message =
+        typeof data?.message === "string"
+          ? data.message
+          : "Stake required before readying up.";
+      setStakeError(message);
+      setMyReady(false);
+    });
+
     return () => {
       // Cleanup — Colyseus doesn't have off for onStateChange,
       // but the effect cleanup handles the component unmount
@@ -232,12 +367,13 @@ function LobbyOverlay({ room, onLeave }: { room: Room; onLeave: () => void }) {
 
   const handleReady = () => {
     room.send("ready", {});
-    setMyReady(true);
+    setStakeError(null);
   };
 
   const handleUnready = () => {
     room.send("unready", {});
     setMyReady(false);
+    setStakeError(null);
   };
 
   const handleCopyCode = () => {
@@ -251,6 +387,12 @@ function LobbyOverlay({ room, onLeave }: { room: Room; onLeave: () => void }) {
 
   const activePlayers = players.filter((p) => !p.isSpectator);
   const spectators = players.filter((p) => p.isSpectator);
+  const readyLocked = gameMode === "staked" && !!stakeError && !myReady;
+  const readyLabel = myReady
+    ? "⏸ UNREADY"
+    : readyLocked
+      ? "⛔ NEED STAKE"
+      : "✅ READY UP";
 
   return (
     <div className="overlay lov-root">
@@ -346,17 +488,41 @@ function LobbyOverlay({ room, onLeave }: { room: Room; onLeave: () => void }) {
         <div className="lov-actions">
           {!players.find((p) => p.sessionId === room.sessionId)
             ?.isSpectator && (
-              <button
-                className={`lov-btn ${myReady ? "lov-btn-unready" : "lov-btn-ready"}`}
-                onClick={myReady ? handleUnready : handleReady}
-              >
-                {myReady ? "⏸ UNREADY" : "✅ READY UP"}
-              </button>
-            )}
+            <button
+              className={`lov-btn ${myReady ? "lov-btn-unready" : "lov-btn-ready"}`}
+              onClick={myReady ? handleUnready : handleReady}
+              style={
+                readyLocked
+                  ? {
+                      background: "rgba(255, 59, 59, 0.2)",
+                      borderColor: "rgba(255, 59, 59, 0.6)",
+                    }
+                  : undefined
+              }
+            >
+              {readyLabel}
+            </button>
+          )}
           <button className="lov-btn lov-btn-leave" onClick={onLeave}>
             🚪 LEAVE
           </button>
         </div>
+        {stakeError && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "8px 12px",
+              background: "rgba(255, 59, 59, 0.15)",
+              border: "1px solid rgba(255, 59, 59, 0.4)",
+              borderRadius: 8,
+              fontSize: 12,
+              color: "#ff6b6b",
+              textAlign: "center",
+            }}
+          >
+            {stakeError}
+          </div>
+        )}
       </div>
     </div>
   );

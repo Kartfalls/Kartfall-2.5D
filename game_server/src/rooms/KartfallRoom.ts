@@ -9,6 +9,18 @@ import {
   getOrCreateProfile,
   recordMatchStats,
 } from "../services/profile.service.js";
+import {
+  createMatchChannel,
+  submitMatchPayouts,
+} from "../services/yellow.service.js";
+import {
+  addChannelParticipant,
+  createMatchChannelRecord,
+  insertChannelHistory,
+  markChannelSettled,
+  updateChannelVersion,
+  upsertChannelBalances,
+} from "../services/matchChannel.service.js";
 
 // ── Systems ──
 import { MovementSystem } from "./systems/MovementSystem.js";
@@ -55,6 +67,7 @@ export class KartfallRoom extends Room {
     // ── Room metadata ──
     state.roomCode = generateRoomCode();
     state.gameMode = options?.gameMode === "staked" ? "staked" : "free";
+    state.matchId = `${this.roomId}_${Date.now()}`;
 
     if (options?.maxPlayers) state.maxPlayers = options.maxPlayers;
     if (options?.maxSpectators) state.maxSpectators = options.maxSpectators;
@@ -71,21 +84,6 @@ export class KartfallRoom extends Room {
       (killerId, victimId, weapon) => {
         // onKill callback — resolve live bet markets
         this.betManager.resolveKillEvent(killerId, victimId);
-
-        // Record kill event to Yellow state channel
-        const killer = state.players.get(killerId);
-        const victim = state.players.get(victimId);
-        this.stakeManager.recordGameEvent({
-          event: "kill",
-          killerId,
-          killerName: killer?.name ?? "",
-          killerWallet: killer?.walletAddress ?? "",
-          victimId,
-          victimName: victim?.name ?? "",
-          victimWallet: victim?.walletAddress ?? "",
-          weapon,
-          timestamp: Date.now(),
-        });
       },
     );
 
@@ -107,6 +105,37 @@ export class KartfallRoom extends Room {
     this.stakeManager = new StakeManager(state, stakeAmountUsdc);
 
     this.betManager = new BetManager(this as unknown as Room, state);
+
+    // ── Match channel (created immediately) ──
+    void (async () => {
+      if (!env.YELLOW_ENABLED) return;
+      try {
+        const participants: string[] = [];
+        const stakeAmount = BigInt(this.state.stakeAmountMicro || 0);
+        const result = await createMatchChannel({
+          matchId: this.state.matchId,
+          participants,
+          stakeAmount,
+          mode: this.state.gameMode,
+        });
+        this.state.channelId = result.channelId;
+
+        await createMatchChannelRecord({
+          matchId: this.state.matchId,
+          channelId: result.channelId,
+          participants,
+          asset: env.YELLOW_ASSET,
+          chainId: result.chainId,
+          mode: this.state.gameMode,
+          stakeAmount,
+          status: "open",
+          version: result.version,
+          createdAt: Date.now(),
+        });
+      } catch (err) {
+        console.error("[KartfallRoom] Failed to create match channel:", err);
+      }
+    })();
 
     // ── Init crates ──
     this.itemSystem.initCrates();
@@ -228,6 +257,13 @@ export class KartfallRoom extends Room {
     }
 
     this.state.players.set(client.sessionId, player);
+
+    if (player.walletAddress && this.state.channelId) {
+      addChannelParticipant(this.state.matchId, player.walletAddress).catch(
+        (err) =>
+          console.error("[KartfallRoom] addChannelParticipant failed:", err),
+      );
+    }
 
     console.log(
       `[KartfallRoom] ${player.isSpectator ? "Spectator" : "Player"} ${client.sessionId} joined (${player.name})`,
@@ -403,7 +439,7 @@ export class KartfallRoom extends Room {
     );
 
     // ── Ready ──
-    this.onMessage("ready", (client: Client) => {
+    this.onMessage("ready", async (client: Client, message: any) => {
       if (this.state.phase !== "lobby" && this.state.phase !== "countdown")
         return;
 
@@ -414,6 +450,62 @@ export class KartfallRoom extends Room {
       const now = Date.now();
       if (now - player.lastReadyToggle < READY_DEBOUNCE_MS) return;
       player.lastReadyToggle = now;
+
+      if (this.state.gameMode === "staked" && env.YELLOW_ENABLED) {
+        const activePlayers = this.getNonSpectatorPlayers();
+        if (activePlayers.length < 2) {
+          player.isReady = false;
+          client.send("stake_required", {
+            message: "Staked matches require at least 2 players.",
+          });
+          return;
+        }
+
+        if (
+          !env.YELLOW_ASSET_ADDRESS ||
+          !env.YELLOW_CUSTODY_ADDRESS ||
+          !env.YELLOW_ADJUDICATOR_ADDRESS
+        ) {
+          player.isReady = false;
+          client.send("stake_required", {
+            message: "Staking is not configured on the server.",
+          });
+          return;
+        }
+
+        if (!player.walletAddress) {
+          player.isReady = false;
+          client.send("stake_required", {
+            message: "Connect a wallet to join staked matches.",
+          });
+          return;
+        }
+
+        try {
+          const canStake = await this.stakeManager.canPlayerStake(
+            player.walletAddress,
+          );
+          if (!canStake) {
+            player.isReady = false;
+            client.send("stake_required", {
+              message:
+                "Not enough unified balance for this stake. Settle or fund unified balance first.",
+              requiredMicro: this.state.stakeAmountMicro,
+            });
+            return;
+          }
+        } catch (err) {
+          console.error(
+            `[KartfallRoom] Stake check failed for ${client.sessionId}:`,
+            err,
+          );
+          player.isReady = false;
+          client.send("stake_required", {
+            message: "Stake check failed. Try again in a moment.",
+          });
+          return;
+        }
+      }
 
       player.isReady = true;
       this.matchManager.checkReadyState();
@@ -494,14 +586,6 @@ export class KartfallRoom extends Room {
    * ================================================================ */
 
   private async handleMatchStart(): Promise<void> {
-    // Create Yellow state channel for this match (ALL modes — free + staked)
-    try {
-      await this.stakeManager.createChannel(this.roomId);
-    } catch (err) {
-      console.error(`[KartfallRoom] Channel creation failed:`, err);
-      // Don't block the match
-    }
-
     // Deposit stakes for staked games
     if (this.state.gameMode === "staked") {
       const players = this.getPlayersWithWallets();
@@ -570,18 +654,147 @@ export class KartfallRoom extends Room {
     });
     await Promise.all(statsPromises);
 
-    // Distribute stake payouts
-    try {
-      await this.stakeManager.distributePayouts();
-    } catch (err) {
-      console.error(`[KartfallRoom] Payout distribution failed:`, err);
-    }
-
     // Resolve static bet markets
     try {
       await this.betManager.resolveMatchEnd(winnerId, mostDeathsId);
     } catch (err) {
       console.error(`[KartfallRoom] Bet resolution failed:`, err);
+    }
+
+    const betSummary = this.betManager.getSettlementSummary();
+    this.betManager.resetSettlementSummary();
+
+    const stakeSummary = this.stakeManager.finalizeStakePayouts();
+
+    const payoutByWallet = new Map<string, bigint>();
+    const stakeByWallet = new Map<string, bigint>();
+    const betByWallet = new Map<string, bigint>();
+    const playerCutByWallet = new Map<string, bigint>();
+
+    const addAmount = (wallet: string, amount: bigint) => {
+      if (!wallet || amount <= 0n) return;
+      const current = payoutByWallet.get(wallet) ?? 0n;
+      payoutByWallet.set(wallet, current + amount);
+    };
+
+    for (const payout of stakeSummary.payouts) {
+      if (!payout.walletAddress) continue;
+      stakeByWallet.set(payout.walletAddress, payout.stakeShare);
+      addAmount(payout.walletAddress, payout.stakeShare);
+    }
+
+    betSummary.payoutsByWallet.forEach((amount, wallet) => {
+      betByWallet.set(wallet, amount);
+      addAmount(wallet, amount);
+    });
+
+    betSummary.playerCutsByWallet.forEach((amount, wallet) => {
+      playerCutByWallet.set(wallet, amount);
+      addAmount(wallet, amount);
+    });
+
+    const allocations = Array.from(payoutByWallet.entries()).map(
+      ([destination, amount]) => ({
+        destination,
+        amount,
+      }),
+    );
+
+    const platformRakeTotal = stakeSummary.rake + betSummary.platformRake;
+    if (platformRakeTotal > 0n && env.YELLOW_TREASURY_ADDRESS) {
+      allocations.push({
+        destination: env.YELLOW_TREASURY_ADDRESS,
+        amount: platformRakeTotal,
+      });
+    }
+
+    if (env.YELLOW_ENABLED && this.state.channelId) {
+      try {
+        const { version } = await submitMatchPayouts(
+          this.state.channelId,
+          allocations,
+        );
+        await updateChannelVersion(this.state.matchId, version);
+        await markChannelSettled(this.state.matchId);
+      } catch (err) {
+        console.error("[KartfallRoom] submitMatchPayouts failed:", err);
+      }
+    }
+
+    if (this.state.channelId) {
+      const participantWallets = new Set<string>();
+      this.state.players.forEach((player) => {
+        if (player.walletAddress) participantWallets.add(player.walletAddress);
+      });
+
+      const now = Date.now();
+      const balanceRows = Array.from(participantWallets).map((wallet) => ({
+        channelId: this.state.channelId,
+        wallet,
+        unredeemedAmount: payoutByWallet.get(wallet) ?? 0n,
+        lastUpdated: now,
+      }));
+
+      await upsertChannelBalances(balanceRows);
+
+      const stakeBreakdown = {
+        totalPool: stakeSummary.totalPool.toString(),
+        rake: stakeSummary.rake.toString(),
+        stakePerPlayer: this.state.stakeAmountMicro,
+        payouts: stakeSummary.payouts.map((p) => ({
+          wallet: p.walletAddress,
+          amount: p.stakeShare.toString(),
+        })),
+      };
+
+      const betBreakdown = {
+        platformRake: betSummary.platformRake.toString(),
+        markets: betSummary.markets.map((m) => ({
+          marketType: m.marketType,
+          targetPlayerId: m.targetPlayerId,
+          totalPool: m.totalPool.toString(),
+          platformRake: m.platformRake.toString(),
+          playerCut: m.playerCut.toString(),
+          winners: m.winners.map((w) => ({
+            wallet: w.wallet,
+            payout: w.payout.toString(),
+          })),
+        })),
+      };
+
+      const resultSummary = {
+        matchId: this.state.matchId,
+        roomCode: this.state.roomCode,
+        mode: this.state.gameMode,
+        winnerId,
+        mostDeathsId,
+        finishedAt: now,
+      };
+
+      const historyRows = Array.from(participantWallets).map((wallet) => {
+        const stakePayout = stakeByWallet.get(wallet) ?? 0n;
+        const betPayout = betByWallet.get(wallet) ?? 0n;
+        const playerCut = playerCutByWallet.get(wallet) ?? 0n;
+        const total = stakePayout + betPayout + playerCut;
+        return {
+          channelId: this.state.channelId,
+          matchId: this.state.matchId,
+          wallet,
+          payouts: {
+            stake: stakePayout.toString(),
+            bets: betPayout.toString(),
+            playerCut: playerCut.toString(),
+            total: total.toString(),
+            platformRake: platformRakeTotal.toString(),
+          },
+          betBreakdown,
+          stakeBreakdown,
+          resultSummary,
+          createdAt: now,
+        };
+      });
+
+      await insertChannelHistory(historyRows);
     }
   }
 
@@ -624,6 +837,14 @@ export class KartfallRoom extends Room {
       if (!player.isSpectator && player.walletAddress) {
         result.push([sessionId, player]);
       }
+    });
+    return result;
+  }
+
+  private getNonSpectatorPlayers(): Array<[string, any]> {
+    const result: Array<[string, any]> = [];
+    this.state.players.forEach((player, sessionId) => {
+      if (!player.isSpectator) result.push([sessionId, player]);
     });
     return result;
   }

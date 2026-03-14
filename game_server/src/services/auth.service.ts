@@ -145,6 +145,34 @@ export function getWalletAddress(user: User): string | null {
 }
 
 /**
+ * Returns all usable Ethereum wallet addresses for a user (embedded + external).
+ */
+export function getUserWalletAddresses(user: User): string[] {
+  const addresses: string[] = [];
+  const embedded = getEmbeddedWalletAddress(user);
+  if (embedded) addresses.push(embedded);
+
+  const externals = user.linked_accounts.filter(
+    (a: LinkedAccount) =>
+      a.type === "wallet" &&
+      "chain_type" in a &&
+      (a as { chain_type: string }).chain_type === "ethereum",
+  ) as { address: string }[];
+
+  externals.forEach((w) => {
+    if (w?.address) addresses.push(w.address);
+  });
+
+  return Array.from(new Set(addresses.map((a) => a.toLowerCase())));
+}
+
+export function isUserWalletAddress(user: User, address: string): boolean {
+  if (!address) return false;
+  const normalized = address.toLowerCase();
+  return getUserWalletAddresses(user).includes(normalized);
+}
+
+/**
  * Full auth flow: verify token → fetch user → resolve wallet address.
  *
  * Call this from `onAuth` in your Colyseus Room.

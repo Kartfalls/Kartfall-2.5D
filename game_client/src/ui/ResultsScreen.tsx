@@ -26,6 +26,7 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
     leaderboard: LeaderboardEntryData[];
     rakeAmount: number;
   } | null>(null);
+  const roomGameMode = (room.state as any)?.gameMode;
 
   useEffect(() => {
     const onFinished = (data: any) => {
@@ -162,8 +163,14 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
               </div>
             ) : (
               <div className="res-metrics">
-                <span className="res-metric-item">GAME MODE: FREEPLAY</span>
-                <span className="res-metric-item">READY UP FOR NEXT MATCH</span>
+                <span className="res-metric-item">
+                  GAME MODE: {roomGameMode === "staked" ? "STAKED" : "FREEPLAY"}
+                </span>
+                <span className="res-metric-item">
+                  {roomGameMode === "staked"
+                    ? "STAKE CHANNEL NOT SETTLED"
+                    : "READY UP FOR NEXT MATCH"}
+                </span>
               </div>
             )}
           </>

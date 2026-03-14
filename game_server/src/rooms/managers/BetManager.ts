@@ -7,7 +7,6 @@ import {
   ASSET_DECIMALS,
   DEFAULT_ASSET,
   getPlayerAssetBalance,
-  transferOffChain,
 } from "../../services/yellow.service.js";
 import { env } from "../../config/env.js";
 import type { BetResolvedEvent } from "../../types/events.js";
@@ -19,6 +18,22 @@ interface InternalBet {
   marketType: string;
   targetPlayerId: string;
   amountWei: bigint;
+}
+
+export interface BetMarketSummary {
+  marketType: string;
+  totalPool: bigint;
+  platformRake: bigint;
+  playerCut: bigint;
+  targetPlayerId: string;
+  winners: { wallet: string; payout: bigint }[];
+}
+
+export interface BetSettlementSummary {
+  payoutsByWallet: Map<string, bigint>;
+  playerCutsByWallet: Map<string, bigint>;
+  platformRake: bigint;
+  markets: BetMarketSummary[];
 }
 
 /**
@@ -34,6 +49,10 @@ export class BetManager {
   private bets: InternalBet[] = [];
   private betIdCounter = 0;
   private reservedBetsByWallet = new Map<string, bigint>();
+  private payoutByWallet = new Map<string, bigint>();
+  private playerCutByWallet = new Map<string, bigint>();
+  private platformRakeTotal = 0n;
+  private marketSummaries: BetMarketSummary[] = [];
 
   constructor(room: Room, state: RoomState) {
     this.room = room;
@@ -130,21 +149,8 @@ export class BetManager {
 
     const result = calculateBetPayouts(totalPool, winningBets);
 
-    // Distribute payouts (skip in dev)
-    if (env.NODE_ENV !== "development") {
-      try {
-        for (const winner of result.winningBettors) {
-          await transferOffChain(winner.address, winner.payout);
-        }
-        // Player cut goes to the player being bet on
-        const killer = this.state.players.get(killerId);
-        if (killer && result.playerCut > 0n) {
-          await transferOffChain(killer.walletAddress, result.playerCut);
-        }
-      } catch (err) {
-        console.error("[BetManager] Payout distribution error:", err);
-      }
-    }
+    // Record payouts for match-end settlement
+    this.recordBetResults("next_kill", totalPool, result, killerId);
 
     // Broadcast resolution
     this.room.broadcast("bet_resolved", {
@@ -197,15 +203,7 @@ export class BetManager {
 
     const result = calculateBetPayouts(totalPool, winningBets);
 
-    if (env.NODE_ENV !== "development") {
-      try {
-        for (const winner of result.winningBettors) {
-          await transferOffChain(winner.address, winner.payout);
-        }
-      } catch (err) {
-        console.error(`[BetManager] ${marketType} payout error:`, err);
-      }
-    }
+    this.recordBetResults(marketType, totalPool, result, winnerId);
 
     this.room.broadcast("bet_resolved", {
       marketType,
@@ -220,6 +218,56 @@ export class BetManager {
 
     // Remove resolved bets
     this.bets = this.bets.filter((b) => b.marketType !== marketType);
+  }
+
+  getSettlementSummary(): BetSettlementSummary {
+    return {
+      payoutsByWallet: new Map(this.payoutByWallet),
+      playerCutsByWallet: new Map(this.playerCutByWallet),
+      platformRake: this.platformRakeTotal,
+      markets: [...this.marketSummaries],
+    };
+  }
+
+  resetSettlementSummary(): void {
+    this.payoutByWallet.clear();
+    this.playerCutByWallet.clear();
+    this.platformRakeTotal = 0n;
+    this.marketSummaries = [];
+  }
+
+  private recordBetResults(
+    marketType: string,
+    totalPool: bigint,
+    result: ReturnType<typeof calculateBetPayouts>,
+    targetPlayerId: string,
+  ): void {
+    for (const winner of result.winningBettors) {
+      const current = this.payoutByWallet.get(winner.address) ?? 0n;
+      this.payoutByWallet.set(winner.address, current + winner.payout);
+    }
+
+    if (result.playerCut > 0n) {
+      const target = this.state.players.get(targetPlayerId);
+      const wallet = target?.walletAddress ?? "";
+      if (wallet) {
+        const current = this.playerCutByWallet.get(wallet) ?? 0n;
+        this.playerCutByWallet.set(wallet, current + result.playerCut);
+      }
+    }
+
+    this.platformRakeTotal += result.platformRake;
+    this.marketSummaries.push({
+      marketType,
+      totalPool,
+      platformRake: result.platformRake,
+      playerCut: result.playerCut,
+      targetPlayerId,
+      winners: result.winningBettors.map((w) => ({
+        wallet: w.address,
+        payout: w.payout,
+      })),
+    });
   }
 
   private reserveBet(walletAddress: string, amountWei: bigint): void {

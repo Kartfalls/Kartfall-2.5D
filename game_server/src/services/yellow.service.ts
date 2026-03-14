@@ -1,36 +1,37 @@
 import {
-  createAppSessionMessage,
-  createSubmitAppStateMessage,
-  createCloseAppSessionMessage,
   createGetLedgerBalancesMessage,
+  createCreateChannelMessage,
+  createResizeChannelMessage,
+  createCloseChannelMessage,
+  createAuthRequestMessage,
+  createAuthVerifyMessage,
+  createAuthVerifyMessageFromChallenge,
+  createEIP712AuthMessageSigner,
+  createGetAssetsMessage,
   parseAnyRPCResponse,
+  RPCMethod,
   createECDSAMessageSigner,
   generateRequestId,
   getRequestId,
-  generateChannelNonce,
-  getChannelId,
   StateIntent,
-  RPCAppStateIntent,
-  RPCProtocolVersion,
-  RPCAppSessionAllocation,
+  AuthRequestParams,
   NitroliteClient,
   WalletStateSigner,
 } from "@erc7824/nitrolite";
-import { getPackedState } from "@erc7824/nitrolite/dist/utils/state.js";
-import { signRawECDSAMessage } from "@erc7824/nitrolite/dist/utils/sign.js";
 import { Decimal } from "decimal.js";
 import { env } from "../config/env.js";
-import type { PlayerPayout } from "./financial.js";
 import {
   type Address,
   http,
   createWalletClient,
   createPublicClient,
   erc20Abi,
+  getAddress,
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
+import { custodyAbi } from "@erc7824/nitrolite/dist/abis/generated";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -62,7 +63,9 @@ let ws: WebSocket | null = null;
 const pending = new Map<number, Pending>();
 let nitroClient: NitroliteClient | null = null;
 let viemPublicClient: ReturnType<typeof createPublicClient> | null = null;
-const CHANNEL_CHALLENGE = 86_400n; // 1 day
+let authReady = false;
+let sessionSigner: ReturnType<typeof createECDSAMessageSigner> | null = null;
+let sessionKey: `0x${string}` | null = null;
 
 function ensureEnabled() {
   if (!YELLOW_ENABLED) {
@@ -78,6 +81,141 @@ function ensureEnabled() {
   }
 }
 
+async function ensurePlatformEOA(
+  publicClient: ReturnType<typeof createPublicClient>,
+  address: Address,
+): Promise<void> {
+  const code = await publicClient.getBytecode({ address });
+  if (code && code !== "0x") {
+    throw new Error(
+      "YELLOW_PRIVATE_KEY must be a plain EOA. Contract / smart wallets are not supported by Yellow.",
+    );
+  }
+}
+
+/**
+ * Ask the clearnode to prepare a channel and co-sign the initial state.
+ * Returns params that can be fed directly into NitroliteClient.createChannel().
+ */
+async function requestServerPreparedChannelParams(): Promise<{
+  channel: Parameters<NitroliteClient["createChannel"]>[0]["channel"];
+  unsignedInitialState: Parameters<
+    NitroliteClient["createChannel"]
+  >[0]["unsignedInitialState"];
+  serverSignature: Hex;
+}> {
+  ensureEnabled();
+  await ensureAuthenticated();
+  const signer = createECDSAMessageSigner(
+    PLATFORM_PRIVATE_KEY as `0x${string}`,
+  );
+
+  const signerToUse = sessionSigner ?? signer;
+
+  const rpc = await createCreateChannelMessage(
+    signerToUse,
+    {
+      chain_id: CHAIN_ID,
+      token: ASSET_ADDRESS as Address,
+    },
+    generateRequestId(),
+    Date.now(),
+  );
+
+  const res = await sendRPC(rpc);
+  if (!res || res.method !== RPCMethod.CreateChannel) {
+    console.error(
+      "[Yellow] Unexpected clearnode response to create_channel",
+      res,
+    );
+    if (res?.method === RPCMethod.Error) {
+      // If the token isn't supported, fetch the list of assets to help the caller.
+      const errMsg = (res as any)?.params?.error ?? "unknown error";
+      if (/token not supported/i.test(errMsg)) {
+        try {
+          const assets = await fetchSupportedAssets();
+          console.error("[Yellow] Supported assets from clearnode:", assets);
+        } catch (assetErr) {
+          console.error("[Yellow] Failed to fetch supported assets", assetErr);
+        }
+      }
+      throw new Error(`Clearnode error: ${errMsg}`);
+    }
+    throw new Error(
+      "Unexpected response from Yellow clearnode while preparing channel",
+    );
+  }
+
+  const params = res.params as {
+    channelId: Hex;
+    state: {
+      intent: number;
+      version: number;
+      stateData: Hex;
+      allocations: { destination: Address; token: Address; amount: bigint }[];
+    };
+    serverSignature: Hex;
+    channel: {
+      participants: Address[];
+      adjudicator: Address;
+      challenge: number;
+      nonce: number;
+    };
+  };
+
+  if (
+    !params?.channel ||
+    !params?.state ||
+    !params?.serverSignature ||
+    !Array.isArray(params.channel.participants)
+  ) {
+    throw new Error("Clearsigned channel response missing required fields");
+  }
+
+  // Sanity: participants must be unique and must include the platform wallet.
+  const platform = getPlatformAddress().toLowerCase();
+  const lowered = params.channel.participants.map((p) => p.toLowerCase());
+  const unique = new Set(lowered);
+  if (unique.size !== lowered.length) {
+    throw new Error("Clearsigned channel has duplicate participants");
+  }
+  if (!lowered.includes(platform)) {
+    throw new Error("Platform wallet not present in clearnode channel");
+  }
+
+  return {
+    channel: {
+      participants: params.channel.participants,
+      adjudicator: params.channel.adjudicator as Address,
+      challenge: BigInt(params.channel.challenge),
+      nonce: BigInt(params.channel.nonce),
+    },
+    unsignedInitialState: {
+      intent: params.state.intent as StateIntent,
+      version: BigInt(params.state.version),
+      data: params.state.stateData as Hex,
+      allocations: params.state.allocations.map((a) => ({
+        destination: a.destination as Address,
+        token: a.token as Address,
+        amount: BigInt(a.amount),
+      })),
+    },
+    serverSignature: params.serverSignature as Hex,
+  };
+}
+
+async function fetchSupportedAssets(): Promise<any[]> {
+  const req = await createGetAssetsMessage(
+    undefined as any,
+    CHAIN_ID,
+    generateRequestId(),
+    Date.now(),
+  );
+  const res = await sendRPC(req);
+  if (!res || res.method !== RPCMethod.GetAssets) return [];
+  return (res as any)?.params?.assets ?? [];
+}
+
 async function ensureSocket(): Promise<WebSocket> {
   ensureEnabled();
   if (ws && ws.readyState === ws.OPEN) return ws;
@@ -89,22 +227,35 @@ async function ensureSocket(): Promise<WebSocket> {
       resolve(socket);
     };
     socket.onerror = (err) => {
+      // Reject connect promise and flush any pending requests.
+      pending.forEach((p) => p.reject(err));
+      pending.clear();
+      authReady = false;
       reject(err);
     };
     socket.onmessage = (event) => {
       const raw = typeof event.data === "string" ? event.data : "";
       try {
         const res = parseAnyRPCResponse(raw);
-        const reqId = getRequestId(res as any);
+        const reqId =
+          (res as any).requestId ?? getRequestId(res as any) ?? undefined;
         if (reqId !== undefined && pending.has(reqId)) {
           pending.get(reqId)!.resolve(res);
           pending.delete(reqId);
         }
       } catch (err) {
-        console.error("[Yellow] Failed to parse response", err);
+        console.error("[Yellow] Failed to parse response", {
+          err,
+          raw: raw?.slice(0, 500),
+        });
       }
     };
     socket.onclose = () => {
+      pending.forEach((p) =>
+        p.reject(new Error("Yellow clearnode WebSocket closed")),
+      );
+      pending.clear();
+      authReady = false;
       ws = null;
     };
   });
@@ -115,6 +266,9 @@ async function sendRPC(message: string): Promise<any> {
   const reqId = (() => {
     try {
       const parsed = JSON.parse(message);
+      if (Array.isArray(parsed?.req)) {
+        return parsed.req[0] as number;
+      }
       return parsed?.id as number | undefined;
     } catch {
       return undefined;
@@ -160,6 +314,7 @@ async function getNitroClient(): Promise<NitroliteClient> {
   ) as typeof sepolia;
 
   const publicClient = getPublicClient(chain);
+  await ensurePlatformEOA(publicClient, account.address as Address);
 
   const walletClient = createWalletClient({
     account,
@@ -211,9 +366,118 @@ function toAllocation(
   } as any;
 }
 
+function getRPCSigner() {
+  return (
+    sessionSigner ??
+    createECDSAMessageSigner(PLATFORM_PRIVATE_KEY as `0x${string}`)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/** Authenticate once per process with the clearnode. Required for create_channel. */
+async function ensureAuthenticated(): Promise<void> {
+  if (authReady) return;
+  const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
+  const platform = account.address as Address;
+  const appCredential =
+    env.YELLOW_API_KEY?.trim() || env.YELLOW_APP_ID?.trim() || "kartfall_v1";
+  const expiresAtSec = BigInt(Math.floor(Date.now() / 1000) + 24 * 60 * 60); // 24h in seconds
+
+  // Create an ephemeral session key (per process) for signed RPCs.
+  if (!sessionKey) {
+    const { randomBytes } = await import("crypto");
+    sessionKey = `0x${randomBytes(32).toString("hex")}` as `0x${string}`;
+    sessionSigner = createECDSAMessageSigner(sessionKey);
+  }
+  const sessionAccount = privateKeyToAccount(sessionKey as `0x${string}`);
+
+  const authParams: AuthRequestParams = {
+    address: platform as Address,
+    session_key: sessionAccount.address as Address,
+    application: appCredential,
+    allowances: [],
+    expires_at: expiresAtSec,
+    scope: "*",
+  };
+
+  const authReq = await createAuthRequestMessage(
+    authParams,
+    generateRequestId(),
+    Date.now(),
+  );
+
+  const challenge = await sendRPC(authReq);
+  const challengeMethod = challenge?.method;
+  console.log("[Yellow] auth response", {
+    method: challengeMethod,
+    raw: challenge,
+  });
+  if (
+    !challenge ||
+    (challengeMethod !== RPCMethod.AuthRequest &&
+      challengeMethod !== RPCMethod.AuthChallenge)
+  ) {
+    if (challengeMethod === RPCMethod.Error) {
+      throw new Error(
+        `Clearnode auth_request failed: ${(challenge as any)?.params?.error ?? "unknown"}`,
+      );
+    }
+    throw new Error(
+      `Unexpected response from clearnode during auth_request: ${challengeMethod ?? "none"}`,
+    );
+  }
+
+  const challengeMessage = (challenge as any)?.params?.challengeMessage;
+  if (!challengeMessage || typeof challengeMessage !== "string") {
+    throw new Error("Clearnode auth challenge is missing challengeMessage");
+  }
+
+  const eip712Signer = createEIP712AuthMessageSigner(
+    createWalletClient({
+      account,
+      transport: http(RPC_URL!),
+      chain: (CHAIN_ID === sepolia.id
+        ? sepolia
+        : { ...sepolia, id: CHAIN_ID }) as any,
+    }) as any,
+    authParams as any,
+    { name: appCredential },
+  );
+
+  const verifyMsg =
+    challengeMethod === RPCMethod.AuthChallenge
+      ? await createAuthVerifyMessageFromChallenge(
+          eip712Signer,
+          challengeMessage,
+          generateRequestId(),
+          Date.now(),
+        )
+      : await createAuthVerifyMessage(
+          eip712Signer,
+          {
+            params: {
+              challengeMessage,
+            },
+          } as any,
+          generateRequestId(),
+          Date.now(),
+        );
+  const verified = await sendRPC(verifyMsg);
+  console.log("[Yellow] auth verify response", verified);
+  if (
+    !verified ||
+    verified.method !== RPCMethod.AuthVerify ||
+    !(verified as any)?.params?.success
+  ) {
+    throw new Error(
+      `Clearnode auth_verify failed: ${(verified as any)?.params?.error ?? "unknown"}`,
+    );
+  }
+  authReady = true;
+}
 
 export function getPlatformAddress(): Address {
   const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
@@ -243,20 +507,65 @@ export async function getPlayerAssetBalance(
   asset: string = DEFAULT_ASSET,
 ): Promise<string> {
   try {
-    const signer = createECDSAMessageSigner(
-      PLATFORM_PRIVATE_KEY as `0x${string}`,
-    );
+    await ensureAuthenticated();
+    const signer = getRPCSigner();
     const req = await createGetLedgerBalancesMessage(
       signer,
       walletAddress as Address,
       generateRequestId(),
     );
     const res = await sendRPC(req);
-    const result = (res?.result as any[]) || [];
-    const entry = result.find(
-      (b: any) => (b.asset ?? b.token)?.toLowerCase() === asset.toLowerCase(),
-    );
-    return entry?.balance ?? entry?.amount ?? "0";
+    if (!res || res.method !== RPCMethod.GetLedgerBalances) {
+      if (res?.method === RPCMethod.Error) {
+        throw new Error(
+          `Clearnode error: ${(res as any)?.params?.error ?? "unknown"}`,
+        );
+      }
+      throw new Error(
+        `Unexpected response from clearnode during get_ledger_balances: ${res?.method ?? "none"}`,
+      );
+    }
+    const balances =
+      (res as any)?.params?.ledgerBalances ??
+      (res as any)?.params?.ledger_balances ??
+      [];
+    const requestedAsset = asset.toLowerCase();
+    const configuredAssetAddress = ASSET_ADDRESS.toLowerCase();
+
+    const entry = balances.find((balanceEntry: any) => {
+      const candidates = [
+        balanceEntry?.asset,
+        balanceEntry?.token,
+        balanceEntry?.symbol,
+        balanceEntry?.assetSymbol,
+        balanceEntry?.asset_address,
+        balanceEntry?.token_address,
+        balanceEntry?.assetAddress,
+        balanceEntry?.tokenAddress,
+        balanceEntry?.address,
+      ]
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.toLowerCase());
+
+      if (candidates.includes(requestedAsset)) return true;
+
+      if (
+        configuredAssetAddress &&
+        candidates.includes(configuredAssetAddress)
+      ) {
+        return true;
+      }
+
+      return false;
+    });
+
+    const rawBalance =
+      entry?.balance ??
+      entry?.amount ??
+      entry?.available ??
+      entry?.value ??
+      "0";
+    return String(rawBalance);
   } catch (err) {
     console.error("[Yellow] balance error", err);
     return "0";
@@ -280,81 +589,46 @@ export async function getPlatformChannelBalance(): Promise<string> {
   }
 }
 
-async function buildHomeChannelParams(
-  depositWei: bigint,
-): Promise<{
-  channelParams: Parameters<NitroliteClient["createChannel"]>[0];
-  channelId: Hex;
-}> {
-  const platform = getPlatformAddress();
-  const channel = {
-    participants: [platform as Address, platform as Address],
-    adjudicator: ADJUDICATOR_ADDRESS as Address,
-    challenge: CHANNEL_CHALLENGE,
-    nonce: generateChannelNonce(platform),
-  };
-
-  const unsignedInitialState = {
-    intent: StateIntent.INITIALIZE,
-    version: 0n,
-    data: "0x",
-    allocations: [
-      {
-        destination: platform as Address,
-        token: ASSET_ADDRESS as Address,
-        amount: 0n,
-      },
-      {
-        destination: platform as Address,
-        token: ASSET_ADDRESS as Address,
-        amount: depositWei,
-      },
-    ],
-  };
-
-  const channelId = getChannelId(channel as any, BigInt(CHAIN_ID));
-  const packed = getPackedState(channelId, unsignedInitialState as any);
-  const serverSignature = await signRawECDSAMessage(
-    packed as Hex,
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-
-  return {
-    channelParams: {
-      channel,
-      unsignedInitialState: unsignedInitialState as any,
-      serverSignature,
-    },
-    channelId,
-  };
-}
-
 /** Create the platform's home channel directly on-chain (custody). */
 export async function createHomeChannel(
   depositAmount: Decimal = new Decimal(0),
 ): Promise<string> {
   ensureEnabled();
   const client = await getNitroClient();
-  const depositWei = decimalToWei(depositAmount);
-  const { channelParams, channelId } = await buildHomeChannelParams(depositWei);
-
-  if (depositWei > 0n) {
-    const { txHash } = await client.depositAndCreateChannel(
-      ASSET_ADDRESS as Address,
-      depositWei,
-      channelParams as any,
-    );
+  const prepared = await requestServerPreparedChannelParams();
+  let channelId: Hex | undefined;
+  try {
+    const res = await client.createChannel(prepared as any);
+    channelId = res.channelId;
     console.log(
-      `[Yellow] Home channel deposit+create tx: ${txHash} (channel ${channelId})`,
+      `[Yellow] Home channel create tx: ${res.txHash} (channel ${channelId})`,
     );
-  } else {
-    const { txHash } = await client.createChannel(channelParams as any);
-    console.log(
-      `[Yellow] Home channel create tx: ${txHash} (channel ${channelId})`,
-    );
+  } catch (err: any) {
+    const msg = String(err?.message ?? err);
+    const existing = msg.match(/0x[0-9a-fA-F]{64}/)?.[0] as Hex | undefined;
+    if (msg.toLowerCase().includes("open channel with broker already exists")) {
+      channelId = existing;
+      console.warn(
+        `[Yellow] Home channel already exists${existing ? ` (${existing})` : ""} — skipping creation.`,
+      );
+    } else {
+      throw err;
+    }
   }
 
-  return channelId;
+  if (depositAmount.gt(0)) {
+    try {
+      const depositTx = await depositToChannel(
+        depositAmount,
+        ASSET_ADDRESS as Address,
+      );
+      console.log(`[Yellow] Post-create deposit tx: ${depositTx}`);
+    } catch (err) {
+      console.warn("[Yellow] Deposit after channel creation failed:", err);
+    }
+  }
+
+  return channelId ?? "existing_channel";
 }
 
 // L1 ERC20 balance (not channel)
@@ -363,18 +637,19 @@ export async function getWalletL1Balance(
   assetAddress: string = ASSET_ADDRESS,
 ): Promise<string> {
   try {
+    const normalizedAsset = getAddress(assetAddress as Address);
     const client = getPublicClient(
       CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID },
     );
     const [rawBalance, decimals] = await Promise.all([
       client.readContract({
-        address: assetAddress as Address,
+        address: normalizedAsset,
         abi: erc20Abi,
         functionName: "balanceOf",
         args: [walletAddress as Address],
       }),
       client.readContract({
-        address: assetAddress as Address,
+        address: normalizedAsset,
         abi: erc20Abi,
         functionName: "decimals",
         args: [],
@@ -390,207 +665,177 @@ export async function getWalletL1Balance(
   }
 }
 
+// Custody balance (on-chain escrow, not wallet balance)
+export async function getWalletCustodyBalance(
+  walletAddress: string,
+  assetAddress: string = ASSET_ADDRESS,
+): Promise<string> {
+  try {
+    const normalizedAsset = getAddress(assetAddress as Address);
+    const client = getPublicClient(
+      CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID },
+    );
+    const balances = await client.readContract({
+      address: CUSTODY_ADDRESS as Address,
+      abi: custodyAbi as any,
+      functionName: "getAccountsBalances",
+      args: [[walletAddress as Address], [normalizedAsset]],
+    });
+    const raw =
+      Array.isArray(balances) && Array.isArray(balances[0])
+        ? (balances[0][0] as bigint)
+        : 0n;
+    const balance = new Decimal(raw.toString()).div(
+      new Decimal(10).pow(ASSET_DECIMALS),
+    );
+    return balance.toFixed(2);
+  } catch (err) {
+    console.warn("[Yellow] Custody balance fetch failed", err);
+    return "0";
+  }
+}
+
 export interface MatchChannelConfig {
-  applicationId: string;
-  playerWallets: string[];
-  roomCode: string;
-  gameMode: string;
   matchId: string;
+  participants: string[];
+  stakeAmount: bigint;
+  mode: string;
 }
 
 export interface MatchChannelResult {
-  appSessionId: string;
+  channelId: Hex;
   participants: Address[];
+  chainId: number;
+  assetAddress: Address;
+  version: bigint;
 }
 
 export async function createMatchChannel(
   config: MatchChannelConfig,
 ): Promise<MatchChannelResult> {
   ensureEnabled();
-  const signer = createECDSAMessageSigner(
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-  const participants = [...(config.playerWallets || [])].map(
-    (w) => w as Address,
-  );
-  const weights = participants.map(() => 1);
+  await ensureAuthenticated();
+  const normalized = [...(config.participants || [])]
+    .filter(Boolean)
+    .map((w) => getAddress(w as Address));
 
-  const requestId = generateRequestId();
-  const message = await createAppSessionMessage(
-    signer,
-    {
-      definition: {
-        application: config.applicationId,
+  const participants = Array.from(
+    new Set(normalized.map((w) => w.toLowerCase())),
+  ).map((w) => getAddress(w as Address));
+
+  try {
+    const prepared = await requestServerPreparedChannelParams();
+    const client = await getNitroClient();
+    const result = await client.createChannel(prepared as any);
+
+    return {
+      channelId: result.channelId,
+      participants,
+      chainId: CHAIN_ID,
+      assetAddress: ASSET_ADDRESS as Address,
+      version: prepared.unsignedInitialState.version,
+    };
+  } catch (err: any) {
+    const message = String(err?.message ?? err);
+    const existing = message.match(/0x[0-9a-fA-F]{64}/)?.[0] as
+      | Hex
+      | undefined;
+    if (existing) {
+      console.warn(
+        `[Yellow] Reusing existing channel for match: ${existing}`,
+      );
+      return {
+        channelId: existing,
         participants,
-        weights,
-        quorum: 1,
-        nonce: Date.now(),
-        protocol: RPCProtocolVersion.NitroRPC_0_4,
-        challenge: 86_400, // 1 day in seconds, adjust as needed
-      },
-      allocations: [],
-      session_data: JSON.stringify({
-        roomCode: config.roomCode,
-        gameMode: config.gameMode,
-        matchId: config.matchId,
-        createdAt: Date.now(),
-      }),
-    },
-    requestId,
+        chainId: CHAIN_ID,
+        assetAddress: ASSET_ADDRESS as Address,
+        version: 0n,
+      };
+    }
+    throw err;
+  }
+
+  // unreachable
+}
+
+export async function submitMatchPayouts(
+  channelId: string,
+  allocations: { destination: string; amount: bigint }[],
+): Promise<{ version: bigint }> {
+  ensureEnabled();
+  await ensureAuthenticated();
+  const signer = getRPCSigner();
+
+  let lastVersion = 0n;
+
+  for (const allocation of allocations) {
+    if (!allocation.amount || allocation.amount <= 0n) continue;
+    const req = await createResizeChannelMessage(
+      signer,
+      {
+        channel_id: channelId as any,
+        allocate_amount: allocation.amount,
+        funds_destination: allocation.destination as Address,
+      } as any,
+      generateRequestId(),
+      Date.now(),
+    );
+    const res = await sendRPC(req);
+    if (!res || res.method !== RPCMethod.ResizeChannel) {
+      const errMsg = (res as any)?.params?.error ?? "unknown";
+      throw new Error(`Resize channel failed: ${errMsg}`);
+    }
+    const versionRaw = (res as any)?.params?.state?.version;
+    if (versionRaw !== undefined) {
+      lastVersion = BigInt(versionRaw);
+    }
+  }
+
+  return { version: lastVersion };
+}
+
+export async function withdrawFromChannel(
+  channelId: string,
+  walletAddress: string,
+): Promise<{ txHash: string }> {
+  ensureEnabled();
+  await ensureAuthenticated();
+  const signer = getRPCSigner();
+
+  const closeReq = await createCloseChannelMessage(
+    signer,
+    channelId as any,
+    walletAddress as Address,
+    generateRequestId(),
     Date.now(),
   );
+  const closeRes = await sendRPC(closeReq);
+  if (!closeRes || closeRes.method !== RPCMethod.CloseChannel) {
+    const errMsg = (closeRes as any)?.params?.error ?? "unknown";
+    throw new Error(`Close channel failed: ${errMsg}`);
+  }
 
-  const res = await sendRPC(message);
-  const appSessionId = res?.result?.app_session_id ?? res?.result?.appSessionId;
-  return {
-    appSessionId,
-    participants,
+  const closeParams = (closeRes as any)?.params;
+  const finalState = {
+    channelId: closeParams.channelId as Hex,
+    intent: closeParams.state.intent as StateIntent,
+    version: BigInt(closeParams.state.version),
+    data: closeParams.state.stateData as Hex,
+    allocations: closeParams.state.allocations.map((a: any) => ({
+      destination: a.destination as Address,
+      token: a.token as Address,
+      amount: BigInt(a.amount),
+    })),
+    serverSignature: closeParams.serverSignature as Hex,
   };
-}
 
-export async function depositPlayerStake(
-  appSessionId: string,
-  playerWallet: string,
-  amount: Decimal,
-  version: bigint,
-  asset: string = DEFAULT_ASSET,
-): Promise<void> {
-  ensureEnabled();
-  const signer = createECDSAMessageSigner(
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-  const allocations = [
-    {
-      participant: playerWallet as Address,
-      asset,
-      amount: amount.toFixed(),
-    },
-  ];
+  const client = await getNitroClient();
+  const txHash = await client.closeChannel({
+    stateData: finalState.data,
+    finalState,
+  } as any);
 
-  const req = await createSubmitAppStateMessage(
-    signer,
-    {
-      app_session_id: appSessionId as any,
-      intent: RPCAppStateIntent.Deposit,
-      version: Number(version),
-      allocations,
-      session_data: JSON.stringify({
-        event: "stake_deposit",
-        player: playerWallet,
-      }),
-      protocol: RPCProtocolVersion.NitroRPC_0_4,
-    } as any,
-    generateRequestId(),
-    Date.now(),
-  );
-
-  await sendRPC(req);
-}
-
-export async function updateMatchState(
-  appSessionId: string,
-  gameData: Record<string, unknown>,
-  allocations: { participant: string; asset: string; amount: Decimal }[],
-  version: bigint,
-): Promise<void> {
-  ensureEnabled();
-  const signer = createECDSAMessageSigner(
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-
-  const rpcAllocations = allocations.map((a) => ({
-    participant: a.participant as Address,
-    asset: a.asset,
-    amount: a.amount.toFixed(),
-  }));
-
-  const req = await createSubmitAppStateMessage(
-    signer,
-    {
-      app_session_id: appSessionId as any,
-      intent: RPCAppStateIntent.Operate,
-      version: Number(version),
-      allocations: rpcAllocations,
-      session_data: JSON.stringify(gameData),
-      protocol: RPCProtocolVersion.NitroRPC_0_4,
-    } as any,
-    generateRequestId(),
-    Date.now(),
-  );
-
-  await sendRPC(req);
-}
-
-export async function finalizeMatchChannel(
-  appSessionId: string,
-  payoutAllocations: { participant: string; asset: string; amount: Decimal }[],
-  matchResults: Record<string, unknown>,
-  version: bigint,
-): Promise<void> {
-  ensureEnabled();
-  const signer = createECDSAMessageSigner(
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-
-  const rpcAllocations = payoutAllocations.map((a) => ({
-    participant: a.participant as Address,
-    asset: a.asset,
-    amount: a.amount.toFixed(),
-  }));
-
-  const submit = await createSubmitAppStateMessage(
-    signer,
-    {
-      app_session_id: appSessionId as any,
-      intent: RPCAppStateIntent.Operate,
-      version: Number(version),
-      allocations: rpcAllocations,
-      session_data: JSON.stringify({ event: "match_end", ...matchResults }),
-      protocol: RPCProtocolVersion.NitroRPC_0_4,
-    } as any,
-    generateRequestId(),
-    Date.now(),
-  );
-  await sendRPC(submit);
-
-  const close = await createCloseAppSessionMessage(
-    signer,
-    {
-      app_session_id: appSessionId as any,
-      allocations: rpcAllocations,
-      session_data: JSON.stringify({ event: "channel_closed" }),
-    },
-    generateRequestId(),
-    Date.now(),
-  );
-  await sendRPC(close);
-}
-
-// Off-chain payouts (legacy) — no-op for Nitrolite baseline
-export interface PayoutResult {
-  walletAddress: string;
-  amountToken: string;
-  success: boolean;
-  error?: string;
-}
-
-export async function distributePayoutsOffChain(
-  payouts: PlayerPayout[],
-  asset: string = DEFAULT_ASSET,
-  decimals: number = ASSET_DECIMALS,
-): Promise<PayoutResult[]> {
-  console.warn(
-    "[Yellow] distributePayoutsOffChain not implemented in Nitrolite mode",
-  );
-  return payouts.map((p) => ({
-    walletAddress: p.walletAddress,
-    amountToken: "0",
-    success: false,
-  }));
-}
-
-export async function transferOffChain(): Promise<void> {
-  console.warn("[Yellow] transferOffChain not implemented in Nitrolite mode");
+  return { txHash };
 }
 
 export function isBlockchainConfigured(): boolean {
@@ -609,7 +854,7 @@ export async function depositToChannel(
   return tx;
 }
 
-export async function withdrawFromChannel(
+export async function withdrawFromCustody(
   amount: Decimal,
   assetAddress: string = ASSET_ADDRESS,
 ): Promise<string> {

@@ -26,9 +26,24 @@ import {
   getPlatformChannelBalance,
   getPlatformAddress,
   getWalletL1Balance,
+  getWalletCustodyBalance,
   DEFAULT_ASSET as YELLOW_ASSET,
+  withdrawFromChannel,
 } from "./services/yellow.service.js";
-import { getUser, getWalletAddress } from "./services/auth.service.js";
+import {
+  getUser,
+  getWalletAddress,
+  isUserWalletAddress,
+} from "./services/auth.service.js";
+import {
+  clearChannelBalances,
+  getChannelBalance,
+  getChannelBalancesForWallet,
+  getHistoryForWallet,
+  getMatchChannel,
+  getMatchChannelsByIds,
+  markChannelClosed,
+} from "./services/matchChannel.service.js";
 import { env } from "./config/env.js";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +88,36 @@ async function requireAuth(
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });
   }
+}
+
+async function resolveWalletAddress(req: any): Promise<string> {
+  const { userId } = req.auth ?? {};
+  if (!userId) return "";
+
+  let walletAddress = "";
+  try {
+    const user = await getUser(userId);
+    const requested =
+      typeof req.query?.walletAddress === "string"
+        ? req.query.walletAddress
+        : typeof req.query?.wallet === "string"
+          ? req.query.wallet
+          : typeof req.body?.walletAddress === "string"
+            ? req.body.walletAddress
+            : typeof req.body?.wallet === "string"
+              ? req.body.wallet
+              : "";
+    if (requested) {
+      if (!isUserWalletAddress(user, requested)) return "";
+      walletAddress = requested;
+    } else {
+      walletAddress = getWalletAddress(user) ?? "";
+    }
+  } catch {
+    walletAddress = "";
+  }
+
+  return walletAddress;
 }
 
 const server = defineServer({
@@ -142,25 +187,21 @@ const server = defineServer({
     });
 
     // ── Profile: update display name ────────────────────────────────────────
-    app.put(
-      "/api/profile/name",
-      requireAuth as any,
-      async (req: any, res) => {
-        try {
-          const { userId } = req.auth;
-          const name = (req.body?.name ?? "").toString().trim().slice(0, 24);
-          if (!name) {
-            res.status(400).json({ error: "Name cannot be empty" });
-            return;
-          }
-          const profile = await updateDisplayName(userId, name);
-          res.json(profile);
-        } catch (err) {
-          console.error("[API] PUT /api/profile/name error:", err);
-          res.status(500).json({ error: "Internal server error" });
+    app.put("/api/profile/name", requireAuth as any, async (req: any, res) => {
+      try {
+        const { userId } = req.auth;
+        const name = (req.body?.name ?? "").toString().trim().slice(0, 24);
+        if (!name) {
+          res.status(400).json({ error: "Name cannot be empty" });
+          return;
         }
-      },
-    );
+        const profile = await updateDisplayName(userId, name);
+        res.json(profile);
+      } catch (err) {
+        console.error("[API] PUT /api/profile/name error:", err);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
 
     // ── Yellow status: clearnode + player balance (auth required) ───────────
     app.get("/api/yellow/status", requireAuth as any, async (req: any, res) => {
@@ -170,22 +211,44 @@ const server = defineServer({
         let walletAddress = "";
         try {
           const user = await getUser(userId);
-          walletAddress = getWalletAddress(user) ?? "";
+          const requestedWallet =
+            typeof req.query?.walletAddress === "string"
+              ? req.query.walletAddress
+              : "";
+          if (requestedWallet) {
+            if (!isUserWalletAddress(user, requestedWallet)) {
+              res
+                .status(400)
+                .json({ error: "Wallet address not linked to user" });
+              return;
+            }
+            walletAddress = requestedWallet;
+          } else {
+            walletAddress = getWalletAddress(user) ?? "";
+          }
         } catch {
           walletAddress = "";
         }
 
-        const [nodeOk, playerBalance, platformBalance, walletL1] =
-          await Promise.all([
-            pingYellowNode().catch(() => false),
-            walletAddress
-              ? getYellowBalance(walletAddress).catch(() => "0")
-              : Promise.resolve("0"),
-            getPlatformChannelBalance().catch(() => "0"),
-            walletAddress
-              ? getWalletL1Balance(walletAddress).catch(() => "0")
-              : Promise.resolve("0"),
-          ]);
+        const [
+          nodeOk,
+          playerBalance,
+          platformBalance,
+          walletL1,
+          custodyBalance,
+        ] = await Promise.all([
+          pingYellowNode().catch(() => false),
+          walletAddress
+            ? getYellowBalance(walletAddress).catch(() => "0")
+            : Promise.resolve("0"),
+          getPlatformChannelBalance().catch(() => "0"),
+          walletAddress
+            ? getWalletL1Balance(walletAddress).catch(() => "0")
+            : Promise.resolve("0"),
+          walletAddress
+            ? getWalletCustodyBalance(walletAddress).catch(() => "0")
+            : Promise.resolve("0"),
+        ]);
 
         const platformConfigured =
           !!env.YELLOW_PRIVATE_KEY &&
@@ -205,6 +268,7 @@ const server = defineServer({
           playerBalance,
           platformBalance,
           walletL1Balance: walletL1,
+          custodyBalance,
           asset: YELLOW_ASSET,
           assetAddress: env.YELLOW_ASSET_ADDRESS,
           custodyAddress: env.YELLOW_CUSTODY_ADDRESS,
@@ -218,6 +282,264 @@ const server = defineServer({
         res.status(500).json({ error: "Internal server error" });
       }
     });
+
+    // ── Yellow sandbox faucet: request test funds for caller wallet ─────────
+    app.post(
+      "/api/yellow/faucet",
+      requireAuth as any,
+      async (req: any, res) => {
+        try {
+          const { userId } = req.auth;
+
+          let walletAddress = "";
+          try {
+            const user = await getUser(userId);
+            const requestedWallet =
+              typeof req.body?.walletAddress === "string"
+                ? req.body.walletAddress
+                : "";
+            if (requestedWallet) {
+              if (!isUserWalletAddress(user, requestedWallet)) {
+                res
+                  .status(400)
+                  .json({ error: "Wallet address not linked to user" });
+                return;
+              }
+              walletAddress = requestedWallet;
+            } else {
+              walletAddress = getWalletAddress(user) ?? "";
+            }
+          } catch {
+            walletAddress = "";
+          }
+
+          if (!walletAddress) {
+            res
+              .status(400)
+              .json({ error: "No wallet found for authenticated user" });
+            return;
+          }
+
+          const defaultSandboxFaucet =
+            "https://clearnet-sandbox.yellow.com/faucet/requestTokens";
+          const faucetUrl =
+            process.env.YELLOW_FAUCET_URL?.trim() || defaultSandboxFaucet;
+          const clearnodeUrl = env.YELLOW_CLEARNODE_URL.toLowerCase();
+          const sandboxMode =
+            clearnodeUrl.includes("sandbox") ||
+            faucetUrl.includes("clearnet-sandbox.yellow.com");
+
+          if (!sandboxMode) {
+            res.status(400).json({
+              error:
+                "Faucet is only available in sandbox mode. Configure YELLOW_FAUCET_URL explicitly if needed.",
+            });
+            return;
+          }
+
+          const faucetResp = await fetch(faucetUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userAddress: walletAddress }),
+          });
+
+          const bodyText = await faucetResp.text();
+          if (!faucetResp.ok) {
+            res.status(faucetResp.status).json({
+              error:
+                bodyText ||
+                `Faucet request failed with status ${faucetResp.status}`,
+            });
+            return;
+          }
+
+          res.json({
+            ok: true,
+            walletAddress,
+            response: bodyText || "accepted",
+          });
+        } catch (err) {
+          console.error("[API] /api/yellow/faucet error:", err);
+          res
+            .status(500)
+            .json({ error: "Failed to request Yellow faucet funds" });
+        }
+      },
+    );
+
+    // ── Match balance (wallet + unredeemed) ──────────────────────────────
+    app.get(
+      "/api/match/balance",
+      requireAuth as any,
+      async (req: any, res) => {
+        try {
+          const walletAddress = await resolveWalletAddress(req);
+          if (!walletAddress) {
+            res.status(400).json({ error: "No wallet found for user" });
+            return;
+          }
+
+          const matchId =
+            typeof req.query?.matchId === "string" ? req.query.matchId : "";
+
+          let unredeemed = 0n;
+          let channelId = "";
+          if (matchId) {
+            const channel = await getMatchChannel(matchId);
+            if (channel?.channel_id) {
+              channelId = channel.channel_id;
+              unredeemed = await getChannelBalance(channelId, walletAddress);
+            }
+          } else {
+            const balances = await getChannelBalancesForWallet(walletAddress);
+            unredeemed = balances.reduce(
+              (sum, entry) => sum + entry.unredeemedAmount,
+              0n,
+            );
+          }
+
+          const walletBalance = await getWalletL1Balance(
+            walletAddress,
+            env.YELLOW_ASSET_ADDRESS,
+          );
+
+          res.json({
+            matchId: matchId || null,
+            channelId: channelId || null,
+            walletAddress,
+            walletBalance,
+            unredeemed: unredeemed.toString(),
+            asset: YELLOW_ASSET,
+            assetAddress: env.YELLOW_ASSET_ADDRESS,
+            custodyAddress: env.YELLOW_CUSTODY_ADDRESS,
+            assetDecimals: env.YELLOW_ASSET_DECIMALS,
+            chainId: env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : null,
+          });
+        } catch (err) {
+          console.error("[API] /api/match/balance error:", err);
+          res.status(500).json({ error: "Failed to load match balance" });
+        }
+      },
+    );
+
+    // ── Match withdraw (close channel + redeem) ───────────────────────────
+    app.post(
+      "/api/match/withdraw",
+      requireAuth as any,
+      async (req: any, res) => {
+        try {
+          const matchId =
+            typeof req.body?.matchId === "string" ? req.body.matchId : "";
+          if (!matchId) {
+            res.status(400).json({ error: "matchId is required" });
+            return;
+          }
+
+          const walletAddress = await resolveWalletAddress(req);
+          if (!walletAddress) {
+            res.status(400).json({ error: "No wallet found for user" });
+            return;
+          }
+
+          const channel = await getMatchChannel(matchId);
+          if (!channel?.channel_id) {
+            res.status(404).json({ error: "Match channel not found" });
+            return;
+          }
+
+          const channelId = channel.channel_id as string;
+          const unredeemed = await getChannelBalance(channelId, walletAddress);
+
+          if (channel.status !== "closed" && env.YELLOW_ENABLED) {
+            await withdrawFromChannel(channelId, walletAddress);
+            await markChannelClosed(matchId);
+          }
+
+          await clearChannelBalances(channelId);
+
+          res.json({
+            ok: true,
+            matchId,
+            channelId,
+            walletAddress,
+            withdrawAmount: unredeemed.toString(),
+            asset: YELLOW_ASSET,
+            assetAddress: env.YELLOW_ASSET_ADDRESS,
+            custodyAddress: env.YELLOW_CUSTODY_ADDRESS,
+            assetDecimals: env.YELLOW_ASSET_DECIMALS,
+            chainId: env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : null,
+          });
+        } catch (err) {
+          console.error("[API] /api/match/withdraw error:", err);
+          res.status(500).json({ error: "Failed to withdraw from match" });
+        }
+      },
+    );
+
+    // ── Match history (per wallet) ────────────────────────────────────────
+    app.get(
+      "/api/match/history",
+      requireAuth as any,
+      async (req: any, res) => {
+        try {
+          const walletAddress = await resolveWalletAddress(req);
+          if (!walletAddress) {
+            res.status(400).json({ error: "No wallet found for user" });
+            return;
+          }
+
+          const historyRows = await getHistoryForWallet(walletAddress);
+          const matchIds = Array.from(
+            new Set(historyRows.map((row) => row.match_id).filter(Boolean)),
+          ) as string[];
+          const channels = await getMatchChannelsByIds(matchIds);
+          const channelsByMatch = new Map(
+            channels.map((c: any) => [c.match_id, c]),
+          );
+
+          const balances = await getChannelBalancesForWallet(walletAddress);
+          const balanceByChannel = new Map(
+            balances.map((b) => [b.channelId, b.unredeemedAmount]),
+          );
+
+          const walletBalance = await getWalletL1Balance(
+            walletAddress,
+            env.YELLOW_ASSET_ADDRESS,
+          );
+
+          const history = historyRows.map((row: any) => {
+            const channel = channelsByMatch.get(row.match_id);
+            const unredeemed = balanceByChannel.get(row.channel_id) ?? 0n;
+            return {
+              matchId: row.match_id,
+              channelId: row.channel_id,
+              mode: channel?.mode ?? "unknown",
+              date: channel?.created_at ?? row.created_at,
+              stakeAmount: channel?.stake_amount ?? "0",
+              participants: channel?.participants ?? [],
+              payouts: row.payouts ?? {},
+              betBreakdown: row.bet_breakdown ?? {},
+              stakeBreakdown: row.stake_breakdown ?? {},
+              resultSummary: row.result_summary ?? {},
+              unredeemed: unredeemed.toString(),
+            };
+          });
+
+          res.json({
+            walletAddress,
+            walletBalance,
+            asset: YELLOW_ASSET,
+            assetAddress: env.YELLOW_ASSET_ADDRESS,
+            assetDecimals: env.YELLOW_ASSET_DECIMALS,
+            chainId: env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : null,
+            history,
+          });
+        } catch (err) {
+          console.error("[API] /api/match/history error:", err);
+          res.status(500).json({ error: "Failed to load match history" });
+        }
+      },
+    );
 
     /**
      * Use @colyseus/monitor

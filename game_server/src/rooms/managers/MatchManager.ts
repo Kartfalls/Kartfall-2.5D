@@ -38,7 +38,11 @@ export class MatchManager {
     if (this.state.phase !== "lobby") return;
 
     const players = this.getNonSpectatorPlayers();
-    if (players.length < GAME.MIN_PLAYERS_TO_START) return;
+    const minPlayers =
+      this.state.gameMode === "staked"
+        ? Math.max(GAME.MIN_PLAYERS_TO_START, 2)
+        : GAME.MIN_PLAYERS_TO_START;
+    if (players.length < minPlayers) return;
 
     const allReady = players.every(([, p]) => p.isReady);
     if (!allReady) return;
@@ -58,6 +62,12 @@ export class MatchManager {
 
     if (this.state.phase === "countdown") {
       if (now >= this.state.matchStartsAt) {
+        const players = this.getNonSpectatorPlayers();
+        const minPlayers = Math.max(GAME.MIN_PLAYERS_TO_START, 2);
+        if (players.length < minPlayers) {
+          this.transitionTo("lobby");
+          return;
+        }
         this.transitionTo("playing");
       } else {
         this.state.remainingSeconds = Math.ceil(

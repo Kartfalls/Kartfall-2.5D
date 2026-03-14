@@ -53,6 +53,7 @@ export function useKartfallRoom(
     isSpectator?: boolean;
     gameMode?: string;
     stakeAmount?: number;
+    walletAddress?: string;
   } | null,
 ): UseRoomResult {
   const [room, setRoom] = useState<Room | null>(null);
@@ -146,6 +147,10 @@ export function useKartfallRoom(
 
         if (typeof joinOptions.stakeAmount === "number") {
           opts.stakeAmount = joinOptions.stakeAmount;
+        }
+
+        if (joinOptions.walletAddress) {
+          opts.walletAddress = joinOptions.walletAddress;
         }
 
         // Only send the token if it looks like a real JWT (has dots)

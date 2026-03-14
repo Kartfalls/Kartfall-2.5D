@@ -92,6 +92,9 @@ export const env = {
   /** Registered application ID on Yellow Network for state channels */
   YELLOW_APP_ID: optional("YELLOW_APP_ID", "kartfall_v1"),
 
+  /** Yellow API key (preferred for clearnode auth when available) */
+  YELLOW_API_KEY: optional("YELLOW_API_KEY", ""),
+
   // ── Game Config ──────────────────────────────────────────────────────────
   /** Stake amount in asset-native units (USDC 6 decimals: 1000000 = 1 USDC) */
   STAKE_AMOUNT_WEI: Number(optional("STAKE_AMOUNT_WEI", "1000000")),

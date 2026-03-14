@@ -26,7 +26,7 @@ class EthersTransactionSigner implements TransactionSigner {
 // Fallbacks if env vars are missing
 const DEFAULT_URL = "wss://clearnet-sandbox.yellow.com/ws";
 const DEFAULT_CHAIN_ID = 11155111; // Ethereum Sepolia
-const DEFAULT_ASSET = "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238"; // USDC Ethereum Sepolia
+const DEFAULT_ASSET = "ytest.usd"; // Sandbox asset symbol
 
 export function useYellowClient() {
     const { wallets } = useWallets();
@@ -45,9 +45,21 @@ export function useYellowClient() {
         setError(null);
 
         try {
+            const withTimeout = async <T,>(promise: Promise<T>, label: string, timeoutMs = 8000) => {
+                return await Promise.race([
+                    promise,
+                    new Promise<T>((_, reject) =>
+                        setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs)
+                    ),
+                ]);
+            };
             // 1. Get the EIP-1193 provider from the active Privy wallet
             const activeWallet = wallets[0];
-            const provider = await activeWallet.getEthereumProvider();
+            const provider = await withTimeout(
+                activeWallet.getEthereumProvider(),
+                "Wallet provider",
+                8000
+            );
 
             // 2. Wrap it with ethers.js Web3Provider
             const web3Provider = new ethers.BrowserProvider(provider as any);
@@ -55,25 +67,37 @@ export function useYellowClient() {
             // Request network switch just in case (Ethereum Sepolia)
             const chainIdHex = `0x${DEFAULT_CHAIN_ID.toString(16)}`;
             try {
-                await web3Provider.send("wallet_switchEthereumChain", [{ chainId: chainIdHex }]);
+                await withTimeout(
+                    web3Provider.send("wallet_switchEthereumChain", [{ chainId: chainIdHex }]),
+                    "Chain switch",
+                    12000
+                );
             } catch (switchError: any) {
                 // If the chain is not added to wallet
                 if (switchError.code === 4902) {
-                    await web3Provider.send("wallet_addEthereumChain", [
-                        {
-                            chainId: chainIdHex,
-                            chainName: "Ethereum Sepolia",
-                            rpcUrls: ["https://rpc.sepolia.org"],
-                            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-                            blockExplorerUrls: ["https://sepolia.etherscan.io"],
-                        },
-                    ]);
+                    await withTimeout(
+                        web3Provider.send("wallet_addEthereumChain", [
+                            {
+                                chainId: chainIdHex,
+                                chainName: "Ethereum Sepolia",
+                                rpcUrls: ["https://rpc.sepolia.org"],
+                                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+                                blockExplorerUrls: ["https://sepolia.etherscan.io"],
+                            },
+                        ]),
+                        "Add chain",
+                        12000
+                    );
                 } else {
                     throw switchError;
                 }
             }
 
-            const signer = await web3Provider.getSigner();
+            const signer = await withTimeout(
+                web3Provider.getSigner(),
+                "Wallet signer",
+                8000
+            );
 
             // 3. Create Yellow SDK Signers
             // @ts-ignore - duck typing EthereumMsgSigner for viem compatibility
@@ -82,14 +106,14 @@ export function useYellowClient() {
 
             // 4. Instantiate Yellow Client
             const clearNodeUrl = import.meta.env.VITE_YELLOW_URL || DEFAULT_URL;
-            const client = await Client.create(
-                clearNodeUrl,
-                stateSigner,
-                txSigner
+
+            const client = await withTimeout(
+                Client.create(clearNodeUrl, stateSigner, txSigner),
+                "Clearnode connect"
             );
 
-            // Verify connection via ping
-            await client.ping();
+            // Verify connection via ping (with timeout)
+            await withTimeout(client.ping(), "Clearnode ping");
 
             setYellowClient(client);
 
@@ -116,7 +140,7 @@ export function useYellowClient() {
         initClient,
         isInitializing,
         error,
-        defaultAsset: import.meta.env.VITE_YELLOW_ASSET || DEFAULT_ASSET,
+    defaultAsset: import.meta.env.VITE_YELLOW_ASSET || DEFAULT_ASSET,
         defaultChainId: BigInt(import.meta.env.VITE_YELLOW_CHAIN_ID || DEFAULT_CHAIN_ID)
     };
 }

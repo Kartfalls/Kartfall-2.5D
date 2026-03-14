@@ -12,7 +12,8 @@ export class RoomState extends Schema {
   @type("string") phase: MatchPhase = "lobby";
   @type("string") roomCode: string = "";
   @type("string") hostPlayerId: string = "";
-  @type("string") channelId: string = ""; // Yellow app session ID
+  @type("string") matchId: string = ""; // persistent match identifier
+  @type("string") channelId: string = ""; // Yellow channel ID
 
   @type("uint16") matchDuration: number = 180; // seconds (configurable)
   @type("float64") matchStartsAt: number = 0; // epoch ms
