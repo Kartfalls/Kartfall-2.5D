@@ -93,7 +93,7 @@ export function BettingPanel({ room }: BettingPanelProps) {
       return () => clearTimeout(t);
     };
     EventBus.on("kill-feed", onKill);
-    return () => EventBus.off("kill-feed", onKill);
+    return () => { EventBus.off("kill-feed", onKill); };
   }, [room]);
 
   const handlePlaceBet = () => {

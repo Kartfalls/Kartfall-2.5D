@@ -35,7 +35,7 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
       });
     };
     EventBus.on("game-finished", onFinished);
-    return () => EventBus.off("game-finished", onFinished);
+    return () => { EventBus.off("game-finished", onFinished); };
   }, []);
 
   // Fallback: read from room state if game-finished was missed
