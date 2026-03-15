@@ -650,12 +650,14 @@ export async function getWalletL1Balance(
         abi: erc20Abi,
         functionName: "balanceOf",
         args: [walletAddress as Address],
+        authorizationList: undefined,
       }),
       client.readContract({
         address: normalizedAsset,
         abi: erc20Abi,
         functionName: "decimals",
         args: [],
+        authorizationList: undefined,
       }),
     ]);
     const balance = new Decimal(rawBalance.toString()).div(
@@ -681,6 +683,7 @@ export async function getWalletCustodyBalance(
       abi: custodyAbi as any,
       functionName: "getAccountsBalances",
       args: [[walletAddress as Address], [normalizedAsset]],
+      authorizationList: undefined,
     });
     const raw =
       Array.isArray(balances) && Array.isArray(balances[0])
