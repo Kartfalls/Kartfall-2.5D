@@ -229,6 +229,7 @@ export default function App() {
           profileLoading={profileLoading}
           onUpdateProfileName={updateName}
           onOpenProfile={() => setShowProfile(true)}
+          walletAddress={activeWalletAddress}
         />
       );
     }

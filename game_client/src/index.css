@@ -2517,6 +2517,73 @@ body {
   border-bottom: none;
 }
 
+/* ── Wallet + Faucet ── */
+.sk-wallet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sk-wallet-label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.sk-wallet-value {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--font);
+}
+
+.sk-wallet-copy {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 200, 255, 0.5);
+  background: rgba(0, 200, 255, 0.12);
+  color: #00c8ff;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.sk-wallet-copy:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(0, 200, 255, 0.2);
+  box-shadow: 0 8px 16px rgba(0, 200, 255, 0.2);
+}
+
+.sk-wallet-copy:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sk-faucet-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.sk-faucet-link {
+  color: #ffd166;
+  text-decoration: none;
+  font-family: var(--font-display);
+  letter-spacing: 1px;
+}
+
+.sk-faucet-link:hover {
+  color: #ffe8a3;
+}
+
 /* ── Error ── */
 .sk-error {
   margin-top: 16px;

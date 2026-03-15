@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PlayerProfile } from "../net/useProfile";
 
 const KART_SPRITE_W = 96;
@@ -24,6 +24,7 @@ interface LobbyScreenProps {
   profileLoading?: boolean;
   onUpdateProfileName?: (name: string) => Promise<PlayerProfile | null>;
   onOpenProfile?: () => void;
+  walletAddress?: string | null;
 }
 
 export function LobbyScreen({
@@ -36,6 +37,7 @@ export function LobbyScreen({
   profileLoading,
   onUpdateProfileName,
   onOpenProfile,
+  walletAddress,
 }: LobbyScreenProps) {
   const [name, setName] = useState("");
   const [roomCode, setRoomCode] = useState("");
@@ -44,6 +46,8 @@ export function LobbyScreen({
   const [matchDuration, setMatchDuration] = useState<number>(180);
   const [gameMode, setGameMode] = useState<"free" | "staked">("free");
   const [spinFrame, setSpinFrame] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const copyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (profile?.displayName && !name.trim()) {
@@ -59,7 +63,17 @@ export function LobbyScreen({
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (copyTimeout.current) clearTimeout(copyTimeout.current);
+    };
+  }, []);
+
   const assetSymbol = "TOKEN";
+  const shortenedWallet =
+    walletAddress && walletAddress.length > 10
+      ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+      : walletAddress || "";
 
   const renderKartFrame = (scale: number) => {
     const frameX = (spinFrame % KART_SPRITE_COLS) * KART_SPRITE_W * scale;
@@ -120,6 +134,18 @@ export function LobbyScreen({
     }
   };
 
+  const handleCopyWallet = async () => {
+    if (!walletAddress) return;
+    try {
+      await navigator.clipboard?.writeText(walletAddress);
+      setCopied(true);
+      if (copyTimeout.current) clearTimeout(copyTimeout.current);
+      copyTimeout.current = setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // ignore clipboard failures
+    }
+  };
+
 
   return (
     <div className="sk-lobby">
@@ -167,6 +193,36 @@ export function LobbyScreen({
             Wallet & Balances
           </button>
         )}
+
+        {/* Wallet & Faucet */}
+        <div className="sk-card">
+          <div className="sk-card-title">STAKER TOOLS</div>
+          <div className="sk-wallet-row">
+            <div className="sk-wallet-label">WALLET</div>
+            <div className="sk-wallet-value">
+              {walletAddress ? shortenedWallet : "Not connected"}
+            </div>
+          </div>
+          <button
+            className="sk-wallet-copy"
+            type="button"
+            onClick={handleCopyWallet}
+            disabled={!walletAddress}
+          >
+            {copied ? "Copied" : "Copy Address"}
+          </button>
+          <div className="sk-faucet-row">
+            <span>Need test funds?</span>
+            <a
+              className="sk-faucet-link"
+              href="https://ytest-faucet.vercel.app/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Get Faucet
+            </a>
+          </div>
+        </div>
 
         {/* Game Mode */}
         <div className="sk-card">
