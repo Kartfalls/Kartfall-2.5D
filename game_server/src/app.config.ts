@@ -28,7 +28,7 @@ import {
   getWalletL1Balance,
   getWalletCustodyBalance,
   DEFAULT_ASSET as YELLOW_ASSET,
-  withdrawFromChannel,
+  payoutWinner,
 } from "./services/yellow.service.js";
 import {
   getUser,
@@ -36,7 +36,7 @@ import {
   isUserWalletAddress,
 } from "./services/auth.service.js";
 import {
-  clearChannelBalances,
+  clearPlayerChannelBalance,
   getChannelBalance,
   getChannelBalancesForWallet,
   getHistoryForWallet,
@@ -448,21 +448,35 @@ const server = defineServer({
           }
 
           const channelId = channel.channel_id as string;
-          const unredeemed = await getChannelBalance(channelId, walletAddress);
 
-          if (channel.status !== "closed" && env.YELLOW_ENABLED) {
-            await withdrawFromChannel(channelId, walletAddress);
+          // Block withdrawal if payouts haven't been processed yet.
+          if (channel.status === "open" && env.YELLOW_ENABLED) {
+            res.status(409).json({
+              error:
+                "Payouts are still being processed. Please try again in a few seconds.",
+            });
+            return;
+          }
+
+          const withdrawAmount = await getChannelBalance(channelId, walletAddress);
+
+          if (channel.status !== "closed" && env.YELLOW_ENABLED && withdrawAmount > 0n) {
+            // Platform withdraws from its custody and transfers directly to winner.
+            // The channel stays open for future matches.
+            console.log(`[API] withdraw: paying out ${withdrawAmount.toString()} to ${walletAddress}`);
+            await payoutWinner(walletAddress, withdrawAmount);
             await markChannelClosed(matchId);
           }
 
-          await clearChannelBalances(channelId);
+          // Only clear THIS player's balance — other players can still redeem.
+          await clearPlayerChannelBalance(channelId, walletAddress);
 
           res.json({
             ok: true,
             matchId,
             channelId,
             walletAddress,
-            withdrawAmount: unredeemed.toString(),
+            withdrawAmount: withdrawAmount.toString(),
             asset: YELLOW_ASSET,
             assetAddress: env.YELLOW_ASSET_ADDRESS,
             custodyAddress: env.YELLOW_CUSTODY_ADDRESS,

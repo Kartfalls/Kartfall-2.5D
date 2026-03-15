@@ -43,6 +43,7 @@ export const TEX_PICKUP_ROCKET = "pickup_rocket";
 export const TEX_PICKUP_BOMB = "pickup_bomb";
 export const TEX_PICKUP_BULLET = "pickup_bullet";
 export const TEX_PICKUP_GLOW = "pickup_glow";
+export const TEX_PICKUP_CRATE = "pickup_crate";
 
 /* ── Particle texture keys ── */
 export const TEX_PARTICLE_SMOKE = "particle_smoke";

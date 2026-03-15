@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kartfall — Investor Deck</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800;900&family=Space+Mono:wght@400;700&display=swap");
+
+      :root {
+        --bg: #080809;
+        --card: #0f0f14;
+        --border: #1e1e2a;
+        --primary: #e5ff00;
+        --danger: #ff3b3b;
+        --success: #00ff87;
+        --cyan: #00ffe5;
+        --white: #ffffff;
+        --grey: #666677;
+        --font: "Space Mono", monospace;
+        --font-display: "Orbitron", sans-serif;
+        --glass: rgba(15, 15, 20, 0.78);
+        --glass-border: rgba(229, 255, 0, 0.2);
+        --glow-primary: rgba(229, 255, 0, 0.35);
+        --glow-cyan: rgba(0, 255, 229, 0.25);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--white);
+        font-family: var(--font);
+      }
+
+      body {
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+
+      .bg-far {
+        position: fixed;
+        inset: 0;
+        z-index: -4;
+        background: url("./game_client/public/sprites/ui/background_arena_far.png")
+          repeat;
+        background-size: 640px 360px;
+        opacity: 0.25;
+        image-rendering: pixelated;
+      }
+
+      .bg-mid {
+        position: fixed;
+        inset: 0;
+        z-index: -3;
+        background: url("./game_client/public/sprites/ui/background_arena_mid.png")
+          repeat-x bottom;
+        background-size: 640px 360px;
+        opacity: 0.17;
+        image-rendering: pixelated;
+      }
+
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        z-index: -2;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 0, 0, 0.18) 2px,
+          rgba(0, 0, 0, 0.18) 4px
+        );
+        pointer-events: none;
+      }
+
+      .vignette {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(8, 8, 9, 0) 35%,
+          rgba(8, 8, 9, 0.88) 100%
+        );
+        pointer-events: none;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        border-bottom: 1px solid rgba(229, 255, 0, 0.25);
+        background: rgba(8, 8, 9, 0.8);
+        backdrop-filter: blur(8px);
+      }
+
+      .topbar-inner {
+        width: min(1220px, 94vw);
+        margin: 0 auto;
+        padding: 10px 2px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        letter-spacing: 0.12em;
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      .brand img {
+        height: 26px;
+        image-rendering: pixelated;
+      }
+
+      .brand span {
+        color: var(--primary);
+        font-weight: 700;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn {
+        border: 1px solid var(--primary);
+        color: var(--primary);
+        background: transparent;
+        border-radius: 8px;
+        padding: 7px 10px;
+        cursor: pointer;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-family: var(--font);
+      }
+
+      .btn:hover {
+        background: var(--primary);
+        color: var(--bg);
+      }
+
+      .deck {
+        width: min(1220px, 94vw);
+        margin: 20px auto 42px;
+        display: grid;
+        gap: 18px;
+        counter-reset: slide;
+      }
+
+      .slide {
+        counter-increment: slide;
+        min-height: min(90vh, 760px);
+        position: relative;
+        border: 1px solid var(--glass-border);
+        background: var(--glass);
+        border-radius: 14px;
+        padding: 34px 34px 30px;
+        overflow: hidden;
+        box-shadow: 0 0 36px rgba(0, 0, 0, 0.35);
+      }
+
+      .slide::before {
+        content: "";
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        top: 0;
+        height: 2px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          var(--primary),
+          transparent
+        );
+      }
+
+      .slide::after {
+        content: counter(slide, decimal-leading-zero);
+        position: absolute;
+        bottom: 14px;
+        right: 18px;
+        color: rgba(229, 255, 0, 0.45);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        font-weight: 700;
+      }
+
+      .corner {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        border: 1px solid rgba(229, 255, 0, 0.55);
+      }
+
+      .corner.tl {
+        top: 8px;
+        left: 8px;
+        border-right: none;
+        border-bottom: none;
+      }
+
+      .corner.tr {
+        top: 8px;
+        right: 8px;
+        border-left: none;
+        border-bottom: none;
+      }
+
+      .corner.bl {
+        bottom: 8px;
+        left: 8px;
+        border-right: none;
+        border-top: none;
+      }
+
+      .corner.br {
+        bottom: 8px;
+        right: 8px;
+        border-left: none;
+        border-top: none;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--cyan);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 11px;
+        font-weight: 700;
+        margin-bottom: 14px;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 24px;
+        height: 2px;
+        background: var(--cyan);
+      }
+
+      .title {
+        margin: 0;
+        font-family: var(--font-display);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        line-height: 1.04;
+        font-size: clamp(30px, 4.6vw, 58px);
+      }
+
+      .subtitle {
+        margin-top: 12px;
+        color: #d3defe;
+        line-height: 1.42;
+        font-size: clamp(15px, 1.9vw, 21px);
+        max-width: 980px;
+      }
+
+      .bigline {
+        margin-top: 22px;
+        font-family: var(--font-display);
+        font-size: clamp(20px, 2.8vw, 34px);
+        line-height: 1.2;
+        max-width: 1020px;
+        color: #f4f6ff;
+      }
+
+      .bigline .accent {
+        color: var(--primary);
+        text-shadow: 0 0 14px var(--glow-primary);
+      }
+
+      .bigline .cyan {
+        color: var(--cyan);
+        text-shadow: 0 0 14px var(--glow-cyan);
+      }
+
+      .logo-wrap {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .logo-main {
+        width: min(440px, 72vw);
+        image-rendering: pixelated;
+        filter: drop-shadow(0 0 12px rgba(229, 255, 0, 0.28));
+      }
+
+      .hero-karts {
+        display: grid;
+        grid-template-columns: repeat(4, 56px);
+        gap: 8px;
+      }
+
+      .hero-karts img {
+        width: 56px;
+        height: 56px;
+        image-rendering: pixelated;
+        border: 1px solid rgba(229, 255, 0, 0.18);
+        border-radius: 6px;
+        background: rgba(12, 12, 16, 0.75);
+      }
+
+      .metrics {
+        margin-top: 26px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        border: 1px solid rgba(0, 255, 229, 0.25);
+        background: rgba(7, 8, 12, 0.62);
+        border-radius: 10px;
+        padding: 12px;
+      }
+
+      .metric .value {
+        font-family: var(--font-display);
+        color: var(--primary);
+        font-size: clamp(20px, 2.7vw, 34px);
+      }
+
+      .metric .label {
+        color: #a4b2da;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 11px;
+        margin-top: 4px;
+      }
+
+      .grid-2,
+      .grid-3 {
+        margin-top: 20px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .card {
+        background: rgba(9, 10, 14, 0.78);
+        border: 1px solid rgba(229, 255, 0, 0.18);
+        border-radius: 10px;
+        padding: 14px;
+      }
+
+      .card h3 {
+        margin: 0;
+        color: var(--primary);
+        font-family: var(--font-display);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-size: 16px;
+      }
+
+      .card p,
+      .card li {
+        color: #c5d1f3;
+        font-size: 14px;
+        line-height: 1.44;
+      }
+
+      ul {
+        margin: 9px 0 0;
+        padding-left: 18px;
+      }
+
+      li + li {
+        margin-top: 6px;
+      }
+
+      .track {
+        margin-top: 18px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .lap {
+        display: grid;
+        grid-template-columns: 36px 1fr;
+        gap: 10px;
+      }
+
+      .lap-num {
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 255, 229, 0.38);
+        display: grid;
+        place-items: center;
+        color: var(--cyan);
+        font-family: var(--font-display);
+        font-size: 14px;
+      }
+
+      .lap strong {
+        display: block;
+        color: #ecf4ff;
+        letter-spacing: 0.01em;
+      }
+
+      .lap p {
+        margin: 2px 0 0;
+        color: #c5d1f3;
+      }
+
+      .formula {
+        margin-top: 14px;
+        border: 1px dashed rgba(229, 255, 0, 0.35);
+        border-radius: 10px;
+        padding: 10px 12px;
+        color: #d8e2ff;
+        font-size: 13px;
+      }
+
+      .formula code {
+        color: var(--success);
+        font-family: var(--font);
+      }
+
+      .pill-row {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        border: 1px solid rgba(0, 255, 229, 0.3);
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #b8d6ff;
+      }
+
+      .ask {
+        margin-top: 20px;
+        padding: 14px;
+        border-radius: 10px;
+        border: 1px solid rgba(229, 255, 0, 0.34);
+        background: rgba(9, 10, 14, 0.8);
+      }
+
+      .ask h3 {
+        margin: 0 0 8px;
+        color: var(--primary);
+        font-family: var(--font-display);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .muted {
+        color: var(--grey);
+      }
+
+      .danger {
+        color: var(--danger);
+      }
+
+      .success {
+        color: var(--success);
+      }
+
+      .footer-note {
+        margin-top: 14px;
+        font-size: 11px;
+        color: #8fa3d8;
+      }
+
+      @media (max-width: 920px) {
+        .slide {
+          min-height: auto;
+          padding: 26px 18px 24px;
+        }
+
+        .metrics,
+        .grid-2,
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+
+        .logo-wrap {
+          flex-direction: column;
+        }
+
+        .hero-karts {
+          grid-template-columns: repeat(4, 48px);
+        }
+
+        .hero-karts img {
+          width: 48px;
+          height: 48px;
+        }
+      }
+
+      @media print {
+        .topbar {
+          display: none;
+        }
+
+        .bg-far,
+        .bg-mid,
+        .scanlines,
+        .vignette {
+          display: none;
+        }
+
+        body {
+          background: white;
+          color: black;
+        }
+
+        .deck {
+          width: 100%;
+          margin: 0;
+        }
+
+        .slide {
+          page-break-inside: avoid;
+          background: white;
+          border: 1px solid #ddd;
+          color: black;
+          box-shadow: none;
+        }
+
+        .card,
+        .metric,
+        .ask {
+          border-color: #dcdcdc;
+          background: #f8f8f8;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-far"></div>
+    <div class="bg-mid"></div>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <img src="./game_client/public/sprites/ui/title_logo.png" alt="Kartfall" />
+          <span>Investor Deck</span>
+        </div>
+        <div class="actions">
+          <button class="btn" id="prevBtn" type="button">Prev</button>
+          <button class="btn" id="nextBtn" type="button">Next</button>
+          <button class="btn" onclick="window.print()" type="button">Print / PDF</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="deck" id="deck">
+      <section class="slide" id="s1">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Kartfall • March 2026</div>
+        <div class="logo-wrap">
+          <img class="logo-main" src="./game_client/public/sprites/ui/title_logo.png" alt="KARTFALL" />
+          <div class="hero-karts" aria-hidden="true">
+            <img src="./game_client/public/sprites/karts/kart_yellow_idle.png" alt="" />
+            <img src="./game_client/public/sprites/karts/kart_red_idle.png" alt="" />
+            <img src="./game_client/public/sprites/karts/kart_purple_idle.png" alt="" />
+            <img src="./game_client/public/sprites/karts/kart_black_idle.png" alt="" />
+          </div>
+        </div>
+
+        <h1 class="title" style="margin-top: 12px">Skill Should Settle Instantly.</h1>
+        <p class="subtitle">
+          Kartfall is a real-time multiplayer combat arena where players race, fight, and settle stakes in minutes — while spectators trade live prediction markets inside the same match loop.
+        </p>
+        <p class="bigline">
+          Not a casino skin on top of a game. <span class="accent">A game-native economy</span> where outcomes are earned in play and settled through <span class="cyan">state channels</span>.
+        </p>
+
+        <div class="metrics">
+          <div class="metric">
+            <div class="value">4P + 4S</div>
+            <div class="label">Players + Spectators / room</div>
+          </div>
+          <div class="metric">
+            <div class="value">20Hz</div>
+            <div class="label">Server-authoritative tick</div>
+          </div>
+          <div class="metric">
+            <div class="value">30–600s</div>
+            <div class="label">Configurable match runtime</div>
+          </div>
+          <div class="metric">
+            <div class="value">2 Modes</div>
+            <div class="label">Free play + Staked</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" id="s2">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Narrative</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          The category gap: spectators can bet, players can grind —
+          <span class="danger">but they rarely share one real-time economy.</span>
+        </h2>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3>What’s broken today</h3>
+            <ul>
+              <li>Most betting products are detached from gameplay and feel passive.</li>
+              <li>Traditional on-chain settlement is slow for short combat rounds.</li>
+              <li>Player skill often has weak economic upside in-session.</li>
+              <li>Spectators have no high-frequency, event-driven participation.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Kartfall thesis</h3>
+            <ul>
+              <li><strong>Skill drives outcomes</strong>, not opaque odds engines.</li>
+              <li><strong>Settlement follows gameplay tempo</strong>, not chain confirmation tempo.</li>
+              <li><strong>Watchers become participants</strong> through in-match markets.</li>
+              <li><strong>Wallet UX stays simple</strong> with Privy + profile redemption flow.</li>
+            </ul>
+          </article>
+        </div>
+
+        <p class="bigline" style="margin-top: 20px">
+          We are building the <span class="accent">skill-to-earn spectator arena</span> for fast-session multiplayer.
+        </p>
+      </section>
+
+      <section class="slide" id="s3">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">What Exists Now</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          This is not concept-only. The full loop is already implemented.
+        </h2>
+
+        <div class="grid-3">
+          <article class="card">
+            <h3>Core Game</h3>
+            <ul>
+              <li>Real-time arena combat with rockets, bullets, bombs, crates, and respawns.</li>
+              <li>Lobby → countdown → playing → finished state machine.</li>
+              <li>Leaderboard and results screen with payout visibility.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Financial Loop</h3>
+            <ul>
+              <li>Staked mode with stake validation and match-end payout allocation.</li>
+              <li>Spectator “next kill” market resolves live on kill events.</li>
+              <li>Unredeemed balances tracked and redeemable per wallet profile.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Infra Stack</h3>
+            <ul>
+              <li>Phaser + React client, Colyseus multiplayer server.</li>
+              <li>Privy auth/wallets, Yellow/Nitrolite channel integration.</li>
+              <li>Supabase persistence for profiles, channels, and history.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="pill-row">
+          <span class="pill">Server auth + anti-spam input throttle</span>
+          <span class="pill">Reconnect handling + room code discovery</span>
+          <span class="pill">Wallet-linked profile and XP progression</span>
+          <span class="pill">Staked match safety gates</span>
+        </div>
+      </section>
+
+      <section class="slide" id="s4">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Core Loop</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          One match creates three engagement surfaces:
+          <span class="success">play</span>,
+          <span class="cyan">watch</span>,
+          <span class="accent">predict</span>.
+        </h2>
+
+        <div class="track">
+          <div class="lap">
+            <div class="lap-num">1</div>
+            <div>
+              <strong>Queue as Player or Spectator.</strong>
+              <p>Room code and role selection make social sessions fast to launch.</p>
+            </div>
+          </div>
+
+          <div class="lap">
+            <div class="lap-num">2</div>
+            <div>
+              <strong>Free or Staked match starts after readiness checks.</strong>
+              <p>Staked mode requires wallet and minimum player count gating.</p>
+            </div>
+          </div>
+
+          <div class="lap">
+            <div class="lap-num">3</div>
+            <div>
+              <strong>Combat generates event liquidity.</strong>
+              <p>Every kill can settle a live prediction market and feed new market cycles.</p>
+            </div>
+          </div>
+
+          <div class="lap">
+            <div class="lap-num">4</div>
+            <div>
+              <strong>Results finalize stake + bet distributions.</strong>
+              <p>Wallet-level balances update, users redeem from profile, and queue again.</p>
+            </div>
+          </div>
+        </div>
+
+        <p class="bigline" style="margin-top: 18px">
+          The retention wedge: <span class="accent">every role has a reason to stay in the room.</span>
+        </p>
+      </section>
+
+      <section class="slide" id="s5">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Economics</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          Monetization is embedded in gameplay velocity, not ads.
+        </h2>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3>Staked Match Economics</h3>
+            <ul>
+              <li>Platform rake: <strong>4%</strong> of stake pool.</li>
+              <li>Distributable pool allocated by in-match K/D performance.</li>
+              <li>Supports variable stake sizes by room options.</li>
+            </ul>
+            <div class="formula"><code>stake_revenue = 0.04 × total_stake_pool</code></div>
+          </article>
+
+          <article class="card">
+            <h3>Prediction Market Economics</h3>
+            <ul>
+              <li>Platform rake: <strong>2.5%</strong> of market pool.</li>
+              <li>Player incentive cut: <strong>1%</strong> to the bet-on player.</li>
+              <li>Current ticket size boundaries: 0.1 to 10 USDC.</li>
+            </ul>
+            <div class="formula"><code>bet_revenue = 0.025 × total_bet_volume</code></div>
+          </article>
+        </div>
+
+        <div class="grid-3">
+          <article class="metric">
+            <div class="value">Dual Rake</div>
+            <div class="label">Stake + Prediction Pools</div>
+          </article>
+          <article class="metric">
+            <div class="value">Live Resolve</div>
+            <div class="label">Event-Driven Payout Logic</div>
+          </article>
+          <article class="metric">
+            <div class="value">Low Friction</div>
+            <div class="label">Wallet-Linked Redemption UX</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="slide" id="s6">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Why Us</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          The moat is a <span class="cyan">product + infrastructure compound</span>.
+        </h2>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3>Technical Defensibility</h3>
+            <ul>
+              <li>Server-authoritative simulation with anti-abuse message throttles.</li>
+              <li>Room-scoped channel lifecycle (open → settle → close) tied to match IDs.</li>
+              <li>Persistent channel balances and payout history for auditability.</li>
+              <li>Auth flow filters for compatible wallet types and verifies identity.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Product Defensibility</h3>
+            <ul>
+              <li>Players and spectators both generate platform value in one session.</li>
+              <li>Social room codes create private network effects.</li>
+              <li>Progression systems (XP, level, coins, history) support repeat engagement.</li>
+              <li>Architecture can launch additional game modes on same rails.</li>
+            </ul>
+          </article>
+        </div>
+
+        <p class="bigline" style="margin-top: 20px">
+          Hard to copy quickly because competitors need both <span class="accent">fun gameplay loops</span> and <span class="cyan">real-time settlement reliability</span>.
+        </p>
+      </section>
+
+      <section class="slide" id="s7">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">Go-To-Market</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          Grow from high-intent PvP circles to creator-led spectator circuits.
+        </h2>
+
+        <div class="grid-3">
+          <article class="card">
+            <h3>Phase 1 — Core Community</h3>
+            <ul>
+              <li>Discord-native matchmaking and private room events.</li>
+              <li>Weekly ladders in free mode to seed active room density.</li>
+              <li>Staked conversion once match quality and fairness KPIs are stable.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Phase 2 — Creator Engine</h3>
+            <ul>
+              <li>Creator-hosted “Kartfall Nights” with spectator prediction overlays.</li>
+              <li>Referral rewards tuned for repeated room participation, not one-time signups.</li>
+              <li>Broadcast clips from clutch kill moments that trigger market spikes.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Phase 3 — League Surface</h3>
+            <ul>
+              <li>Seasonal circuits, tournament brackets, and sponsored prize pools.</li>
+              <li>Expanded market catalog (winner, objective, streaks) with strict risk controls.</li>
+              <li>Regional rollout with compliance-aware market toggles.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="slide" id="s8">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+
+        <div class="eyebrow">The Ask</div>
+        <h2 class="title" style="font-size: clamp(28px, 4vw, 48px)">
+          Back Kartfall to define the skill-based real-time wagering arena.
+        </h2>
+
+        <div class="grid-2">
+          <article class="card">
+            <h3>Round Snapshot</h3>
+            <ul>
+              <li><strong>Raise:</strong> [Insert Target Amount]</li>
+              <li><strong>Runway:</strong> [Insert Months]</li>
+              <li><strong>Instrument:</strong> [Equity / SAFE]</li>
+              <li><strong>Use of funds:</strong> Product, growth, liquidity ops, compliance</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Investor Outcome</h3>
+            <ul>
+              <li>Exposure to a new category between competitive gaming and live markets.</li>
+              <li>Revenue tied to engagement depth, not CPM cycles.</li>
+              <li>Reusable settlement infrastructure for multi-title expansion.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="ask">
+          <h3>Positioning Line</h3>
+          <p>
+            Kartfall is the <strong>first skill-first combat arena</strong> where the same room powers
+            gameplay, spectator liquidity, and near-instant financial settlement.
+          </p>
+        </div>
+
+        <p class="footer-note">
+          Replace bracketed fields with your latest numbers. If you want, I can also generate a version with your exact traction metrics and target round terms baked in.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const slides = [...document.querySelectorAll(".slide")];
+      let active = 0;
+
+      const scrollToSlide = (index) => {
+        active = Math.max(0, Math.min(index, slides.length - 1));
+        slides[active].scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+
+      document.getElementById("nextBtn").addEventListener("click", () => scrollToSlide(active + 1));
+      document.getElementById("prevBtn").addEventListener("click", () => scrollToSlide(active - 1));
+
+      window.addEventListener(
+        "keydown",
+        (e) => {
+          if (e.key === "ArrowRight" || e.key === "PageDown") scrollToSlide(active + 1);
+          if (e.key === "ArrowLeft" || e.key === "PageUp") scrollToSlide(active - 1);
+        },
+        { passive: true },
+      );
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const idx = slides.indexOf(entry.target);
+              if (idx >= 0) active = idx;
+            }
+          });
+        },
+        { threshold: 0.55 },
+      );
+
+      slides.forEach((slide) => observer.observe(slide));
+    </script>
+  </body>
+</html>

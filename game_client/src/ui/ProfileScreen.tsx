@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useMatchHistory } from "../net/useMatchHistory";
-import { withdrawFromCustody } from "../net/matchWallet";
 import { getHttpEndpoint } from "../net/http";
 
 interface ProfileScreenProps {
@@ -136,16 +135,8 @@ export function ProfileScreen({
         throw new Error(data?.error ?? `Withdraw failed (${resp.status})`);
       }
 
-      const amountWei = data?.withdrawAmount ?? "0";
-      if (toBigInt(amountWei) > 0n) {
-        await withdrawFromCustody(activeWallet, {
-          custodyAddress: data.custodyAddress,
-          assetAddress: data.assetAddress,
-          chainId: data.chainId,
-          amountWei,
-        });
-      }
-
+      // Server handles the full payout (custody withdraw + ERC20 transfer).
+      // No client-side wallet interaction needed.
       await refreshHistory();
     } catch (err: any) {
       setRedeemError(err?.message ?? "Redeem failed");
@@ -183,7 +174,7 @@ export function ProfileScreen({
       <div className="lobby-vignette" style={{ zIndex: -1 }} />
 
       <div
-        className="res-panel"
+        className="res-panel profile-screen-panel"
         style={{ minWidth: "520px", maxWidth: "980px" }}
       >
         <div className="lobby-corner lobby-corner--tl" />

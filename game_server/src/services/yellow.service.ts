@@ -25,6 +25,7 @@ import {
   http,
   createWalletClient,
   createPublicClient,
+  decodeFunctionData,
   erc20Abi,
   getAddress,
   type Hex,
@@ -766,80 +767,200 @@ export async function submitMatchPayouts(
   await ensureAuthenticated();
   const signer = getRPCSigner();
 
+  const MAX_RESIZE_RETRIES = 5;
+  const RETRY_BASE_MS = 2000;
+
   let lastVersion = 0n;
 
   for (const allocation of allocations) {
     if (!allocation.amount || allocation.amount <= 0n) continue;
-    const req = await createResizeChannelMessage(
-      signer,
-      {
-        channel_id: channelId as any,
-        allocate_amount: allocation.amount,
-        funds_destination: allocation.destination as Address,
-      } as any,
-      generateRequestId(),
-      Date.now(),
-    );
-    const res = await sendRPC(req);
-    if (!res || res.method !== RPCMethod.ResizeChannel) {
+
+    let attempt = 0;
+    while (true) {
+      const req = await createResizeChannelMessage(
+        signer,
+        {
+          channel_id: channelId as any,
+          allocate_amount: allocation.amount,
+          funds_destination: allocation.destination as Address,
+        } as any,
+        generateRequestId(),
+        Date.now(),
+      );
+      const res = await sendRPC(req);
+      if (res?.method === RPCMethod.ResizeChannel) {
+        const versionRaw = (res as any)?.params?.state?.version;
+        if (versionRaw !== undefined) {
+          lastVersion = BigInt(versionRaw);
+        }
+        break;
+      }
+
       const errMsg = (res as any)?.params?.error ?? "unknown";
+      if (errMsg.includes("resize already ongoing") && attempt < MAX_RESIZE_RETRIES) {
+        const delay = RETRY_BASE_MS * (attempt + 1);
+        console.warn(
+          `[Yellow] Resize already ongoing for ${allocation.destination}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RESIZE_RETRIES})`,
+        );
+        await new Promise<void>((r) => setTimeout(r, delay));
+        attempt++;
+        continue;
+      }
+
       throw new Error(`Resize channel failed: ${errMsg}`);
-    }
-    const versionRaw = (res as any)?.params?.state?.version;
-    if (versionRaw !== undefined) {
-      lastVersion = BigInt(versionRaw);
     }
   }
 
   return { version: lastVersion };
 }
 
-export async function withdrawFromChannel(
-  channelId: string,
-  walletAddress: string,
+/**
+ * Pay a winner their allocated amount directly:
+ * 1. Platform withdraws `amountWei` from its own custody account to its L1 wallet.
+ * 2. Platform transfers `amountWei` USDC directly to the winner's L1 wallet.
+ *
+ * This bypasses the channel close mechanism (which only distributes from the
+ * channel's on-chain allocation, not from the platform's general custody balance
+ * that players funded via custody.deposit). The channel stays open for future matches.
+ */
+export async function payoutWinner(
+  winnerWallet: string,
+  amountWei: bigint,
 ): Promise<{ txHash: string }> {
   ensureEnabled();
-  await ensureAuthenticated();
-  const signer = getRPCSigner();
+  if (amountWei <= 0n) return { txHash: "" };
 
-  const closeReq = await createCloseChannelMessage(
-    signer,
-    channelId as any,
-    walletAddress as Address,
-    generateRequestId(),
-    Date.now(),
-  );
-  const closeRes = await sendRPC(closeReq);
-  if (!closeRes || closeRes.method !== RPCMethod.CloseChannel) {
-    const errMsg = (closeRes as any)?.params?.error ?? "unknown";
-    throw new Error(`Close channel failed: ${errMsg}`);
-  }
+  const chain = (
+    CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID }
+  ) as any;
+  const publicClient = getPublicClient(chain);
+  const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
+  const walletClient = createWalletClient({
+    account,
+    transport: http(RPC_URL!),
+    chain,
+  });
 
-  const closeParams = (closeRes as any)?.params;
-  const finalState = {
-    channelId: closeParams.channelId as Hex,
-    intent: closeParams.state.intent as StateIntent,
-    version: BigInt(closeParams.state.version),
-    data: closeParams.state.stateData as Hex,
-    allocations: closeParams.state.allocations.map((a: any) => ({
-      destination: a.destination as Address,
-      token: a.token as Address,
-      amount: BigInt(a.amount),
-    })),
-    serverSignature: closeParams.serverSignature as Hex,
-  };
-
-  const client = await getNitroClient();
-  const txHash = await client.closeChannel({
-    stateData: finalState.data,
-    finalState,
+  // Step 1: Platform withdraws from its custody account to its L1 wallet.
+  console.log(`[Yellow] payoutWinner: withdrawing ${amountWei} from platform custody for ${winnerWallet}`);
+  const withdrawHash = await walletClient.writeContract({
+    chain,
+    address: CUSTODY_ADDRESS as Address,
+    abi: custodyAbi as any,
+    functionName: "withdraw",
+    args: [ASSET_ADDRESS as Address, amountWei],
   } as any);
+  await publicClient.waitForTransactionReceipt({ hash: withdrawHash });
+  console.log(`[Yellow] payoutWinner: custody withdrawal confirmed (${withdrawHash})`);
+
+  // Step 2: Transfer USDC directly from platform's L1 wallet to winner's wallet.
+  console.log(`[Yellow] payoutWinner: transferring ${amountWei} to ${winnerWallet}`);
+  const txHash = await walletClient.writeContract({
+    chain,
+    address: ASSET_ADDRESS as Address,
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [winnerWallet as Address, amountWei],
+  } as any);
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  console.log(`[Yellow] payoutWinner: transfer confirmed (${txHash})`);
 
   return { txHash };
 }
 
 export function isBlockchainConfigured(): boolean {
   return !!(RPC_URL && ASSET_ADDRESS && CUSTODY_ADDRESS && ADJUDICATOR_ADDRESS);
+}
+
+/**
+ * Verify that a player deposited their stake into the platform's custody account.
+ * Decodes the on-chain transaction to confirm:
+ *   - tx.from === playerWallet
+ *   - tx.to === custody contract
+ *   - receipt.status === success
+ *   - function called is deposit(platformAddress, assetAddress, amount >= stakeAmountWei)
+ */
+export async function verifyStakeDeposit(
+  txHash: string,
+  playerWallet: string,
+  stakeAmountWei: bigint,
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    const chain =
+      CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID };
+    const publicClient = getPublicClient(chain);
+
+    const [tx, receipt] = await Promise.all([
+      publicClient.getTransaction({ hash: txHash as `0x${string}` }),
+      publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` }),
+    ]);
+
+    if (!tx || !receipt) {
+      return { valid: false, error: "Transaction not found on chain" };
+    }
+    if (receipt.status !== "success") {
+      return { valid: false, error: "Deposit transaction failed on chain" };
+    }
+    if (tx.from.toLowerCase() !== playerWallet.toLowerCase()) {
+      return {
+        valid: false,
+        error: "Transaction sender does not match your wallet address",
+      };
+    }
+    if (!tx.to || tx.to.toLowerCase() !== CUSTODY_ADDRESS.toLowerCase()) {
+      return {
+        valid: false,
+        error: "Transaction was not sent to the custody contract",
+      };
+    }
+
+    // Decode the calldata to verify deposit parameters
+    let decoded: { functionName: string; args: readonly unknown[] };
+    try {
+      decoded = decodeFunctionData({
+        abi: custodyAbi as any,
+        data: tx.input,
+      });
+    } catch {
+      return {
+        valid: false,
+        error: "Could not decode transaction — not a valid custody call",
+      };
+    }
+
+    if (decoded.functionName !== "deposit") {
+      return {
+        valid: false,
+        error: `Expected a deposit call, got ${decoded.functionName}`,
+      };
+    }
+
+    const [owner, asset, amount] = decoded.args as [string, string, bigint];
+    const platformAddress = getPlatformAddress();
+
+    if (owner.toLowerCase() !== platformAddress.toLowerCase()) {
+      return {
+        valid: false,
+        error: "Deposit owner must be the platform wallet. Use depositStake(), not depositToChannel().",
+      };
+    }
+    if (asset.toLowerCase() !== ASSET_ADDRESS.toLowerCase()) {
+      return { valid: false, error: "Deposit asset address does not match" };
+    }
+
+    const depositedAmount = BigInt(amount);
+    if (depositedAmount < stakeAmountWei) {
+      return {
+        valid: false,
+        error: `Deposit amount (${depositedAmount}) is less than the required stake (${stakeAmountWei})`,
+      };
+    }
+
+    return { valid: true };
+  } catch (err) {
+    console.error("[Yellow] verifyStakeDeposit error:", err);
+    return { valid: false, error: `Deposit verification failed: ${String(err)}` };
+  }
 }
 
 export async function depositToChannel(

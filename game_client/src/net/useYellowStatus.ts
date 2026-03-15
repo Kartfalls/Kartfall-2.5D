@@ -13,6 +13,7 @@ export interface YellowStatus {
   custodyAddress?: string;
   chainId: number | null;
   walletAddress: string;
+  platformWallet?: string; // server's custody wallet address (deposit owner)
 }
 
 function getHttpEndpoint(): string {

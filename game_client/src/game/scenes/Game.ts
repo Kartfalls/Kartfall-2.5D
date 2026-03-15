@@ -14,6 +14,7 @@ import {
   TEX_PICKUP_BOMB,
   TEX_PICKUP_BULLET,
   TEX_PICKUP_GLOW,
+  TEX_PICKUP_CRATE,
   TEX_PARTICLE_SMOKE,
   TEX_PARTICLE_SPARK,
   TEX_PARTICLE_EXHAUST,
@@ -139,8 +140,10 @@ interface BombEntity {
 }
 
 interface CrateEntity {
+  base: Phaser.GameObjects.Sprite;
   icon: Phaser.GameObjects.Sprite;
   glow: Phaser.GameObjects.Sprite;
+  bobTween?: Phaser.Tweens.Tween;
 }
 
 interface GameStartedSpawn {
@@ -1002,45 +1005,78 @@ export class Game extends Phaser.Scene {
     if (this.anims.exists(ANIM_PICKUP_GLOW)) {
       glow.play(ANIM_PICKUP_GLOW);
     }
-    glow.setDepth(glow.y);
+    glow.setScale(1.2);
+    glow.setAlpha(0.6);
+    glow.setBlendMode(Phaser.BlendModes.ADD);
     this.layerPickups.add(glow);
 
+    // Crate base
+    const base = this.add.sprite(crate.x, crate.y + 2, TEX_PICKUP_CRATE);
+    this.layerPickups.add(base);
+
     // Weapon icon (pick a default, will be unknown until revealed)
-    const icon = this.add.sprite(crate.x, crate.y, TEX_PICKUP_ROCKET);
-    icon.setDepth(icon.y);
+    const icon = this.add.sprite(crate.x, crate.y - 6, TEX_PICKUP_ROCKET);
+    icon.setScale(0.35);
+    icon.setAlpha(0.95);
     this.layerPickups.add(icon);
+
+    const depth = crate.y;
+    glow.setDepth(depth - 1);
+    base.setDepth(depth);
+    icon.setDepth(depth + 1);
+
+    const bobTween = this.tweens.add({
+      targets: icon,
+      y: icon.y - 4,
+      duration: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: "sine.inOut",
+    });
 
     const visible = crate.isAvailable;
     glow.setVisible(visible);
     icon.setVisible(visible);
+    base.setVisible(visible);
 
-    this.crates.set(id, { icon, glow });
+    this.crates.set(id, { icon, glow, base, bobTween });
   }
 
   private updateCrate(id: string, crate: any): void {
     const entity = this.crates.get(id);
     if (!entity) return;
 
-    entity.icon.setDepth(entity.icon.y);
-    entity.glow.setDepth(entity.glow.y);
+    const depth = crate.y;
+    entity.glow.setDepth(depth - 1);
+    entity.base.setDepth(depth);
+    entity.icon.setDepth(depth + 1);
 
     entity.icon.setVisible(crate.isAvailable);
     entity.glow.setVisible(crate.isAvailable);
+    entity.base.setVisible(crate.isAvailable);
 
     // Update icon based on revealed weapon type (if any)
-    if (crate.weaponType === "rocket")
+    if (crate.weaponType === "rocket") {
       entity.icon.setTexture(TEX_PICKUP_ROCKET);
-    else if (crate.weaponType === "bomb")
+      entity.icon.setTint(0xff8a7a);
+    } else if (crate.weaponType === "bomb") {
       entity.icon.setTexture(TEX_PICKUP_BOMB);
-    else if (crate.weaponType === "bullet")
+      entity.icon.setTint(0xf5d76e);
+    } else if (crate.weaponType === "bullet") {
       entity.icon.setTexture(TEX_PICKUP_BULLET);
+      entity.icon.setTint(0x7dd3fc);
+    } else {
+      entity.icon.setTint(0xf4e9d8);
+    }
   }
 
   private destroyCrate(id: string): void {
     const entity = this.crates.get(id);
     if (!entity) return;
+    entity.bobTween?.stop();
     entity.icon.destroy();
     entity.glow.destroy();
+    entity.base.destroy();
     this.crates.delete(id);
   }
 

@@ -14,6 +14,7 @@ interface LobbyScreenProps {
     isSpectator?: boolean,
     gameMode?: string,
     stakeAmount?: number,
+    matchDuration?: number,
   ) => void;
   error?: string;
   isConnecting: boolean;
@@ -40,6 +41,7 @@ export function LobbyScreen({
   const [roomCode, setRoomCode] = useState("");
   const [isSpectator, setIsSpectator] = useState(false);
   const [stakeAmount, setStakeAmount] = useState<number>(1);
+  const [matchDuration, setMatchDuration] = useState<number>(180);
   const [gameMode, setGameMode] = useState<"free" | "staked">("free");
   const [spinFrame, setSpinFrame] = useState(0);
 
@@ -91,6 +93,7 @@ export function LobbyScreen({
       isSpectator,
       gameMode,
       gameMode === "staked" ? stakeAmount : 0,
+      matchDuration,
     );
   };
 
@@ -104,6 +107,7 @@ export function LobbyScreen({
       isSpectator,
       gameMode,
       gameMode === "staked" ? stakeAmount : 0,
+      matchDuration,
     );
   };
 
@@ -203,6 +207,19 @@ export function LobbyScreen({
               match. You can redeem winnings in your Profile.
             </div>
           )}
+          <div className="sk-stake-row" style={{ marginTop: 10 }}>
+            <input
+              className="sk-stake-input"
+              type="number"
+              min={30}
+              max={600}
+              step={30}
+              value={matchDuration || ""}
+              onChange={(e) => setMatchDuration(Number(e.target.value))}
+              placeholder="Duration"
+            />
+            <span className="sk-stake-currency">SEC</span>
+          </div>
         </div>
 
         {/* Spectator Toggle */}

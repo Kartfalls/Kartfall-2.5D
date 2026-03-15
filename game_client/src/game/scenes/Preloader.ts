@@ -15,6 +15,7 @@ import {
   TEX_PICKUP_BOMB,
   TEX_PICKUP_BULLET,
   TEX_PICKUP_GLOW,
+  TEX_PICKUP_CRATE,
   TEX_PARTICLE_SMOKE,
   TEX_PARTICLE_SPARK,
   TEX_PARTICLE_DUST,
@@ -242,6 +243,7 @@ export class Preloader extends Phaser.Scene {
 
   create(): void {
     this.createAnimations();
+    this.createPickupCrateTexture();
     this.scene.start("MainMenu");
   }
 
@@ -385,5 +387,59 @@ export class Preloader extends Phaser.Scene {
         repeat: 0,
       });
     }
+  }
+
+  private createPickupCrateTexture(): void {
+    if (this.textures.exists(TEX_PICKUP_CRATE)) return;
+
+    const size = 32;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    // Base wood
+    g.fillStyle(0x5d3b23, 1);
+    g.fillRect(0, 0, size, size);
+    g.fillStyle(0x7b4f2f, 1);
+    g.fillRect(2, 2, size - 4, size - 4);
+
+    // Inner panel
+    g.fillStyle(0x8d5f3a, 1);
+    g.fillRect(4, 6, size - 8, size - 12);
+
+    // Metal straps
+    g.fillStyle(0x4a525e, 1);
+    g.fillRect(0, 14, size, 4);
+    g.fillRect(14, 0, 4, size);
+    g.lineStyle(1, 0x2c3138, 1);
+    g.strokeRect(0.5, 14.5, size - 1, 3);
+    g.strokeRect(14.5, 0.5, 3, size - 1);
+
+    // Warning stripe
+    g.fillStyle(0xd1a346, 1);
+    g.fillRect(4, 4, size - 8, 4);
+    g.fillStyle(0x2b2418, 1);
+    for (let x = 4; x < size - 8; x += 4) {
+      g.fillRect(x, 4, 2, 4);
+    }
+
+    // Bolts
+    g.fillStyle(0xdedede, 1);
+    const bolts = [
+      [4, 4],
+      [size - 6, 4],
+      [4, size - 6],
+      [size - 6, size - 6],
+      [4, 18],
+      [size - 6, 18],
+    ];
+    for (const [x, y] of bolts) {
+      g.fillRect(x, y, 2, 2);
+    }
+
+    // Outer outline
+    g.lineStyle(2, 0x2a1a10, 1);
+    g.strokeRect(1, 1, size - 2, size - 2);
+
+    g.generateTexture(TEX_PICKUP_CRATE, size, size);
+    g.destroy();
   }
 }

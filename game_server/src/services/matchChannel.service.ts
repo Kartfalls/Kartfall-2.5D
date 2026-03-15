@@ -169,6 +169,23 @@ export async function clearChannelBalances(channelId: string): Promise<void> {
   }
 }
 
+export async function clearPlayerChannelBalance(
+  channelId: string,
+  wallet: string,
+): Promise<void> {
+  const sb = getSupabase();
+  const now = Date.now();
+  const { error } = await sb
+    .from("channel_balances")
+    .update({ unredeemed_amount: "0", last_updated: now })
+    .eq("channel_id", channelId)
+    .eq("wallet", normalizeWallet(wallet));
+
+  if (error) {
+    console.error("[MatchChannels] clearPlayerChannelBalance error:", error);
+  }
+}
+
 export async function insertChannelHistory(
   rows: ChannelHistoryInsert[],
 ): Promise<void> {

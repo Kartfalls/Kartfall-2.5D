@@ -97,12 +97,18 @@ export class KartfallRoom extends Room {
       state,
       () => this.handleMatchStart(),
       () => this.handleMatchEnd(),
+      () => this.stakeManager.finalizeStakePayouts(),
     );
 
     const stakeAmountUsdc = options?.stakeAmount
       ? Number(options.stakeAmount)
       : 0;
     this.stakeManager = new StakeManager(state, stakeAmountUsdc);
+
+    if (options?.matchDuration) {
+      const requested = Number(options.matchDuration);
+      state.matchDuration = Math.min(600, Math.max(30, requested));
+    }
 
     this.betManager = new BetManager(this as unknown as Room, state);
 
@@ -481,27 +487,32 @@ export class KartfallRoom extends Room {
           return;
         }
 
+        const txHash =
+          typeof message?.txHash === "string" ? message.txHash : "";
+
         try {
-          const canStake = await this.stakeManager.canPlayerStake(
+          const result = await this.stakeManager.verifyAndReserveDeposit(
             player.walletAddress,
+            txHash,
           );
-          if (!canStake) {
+          if (!result.valid) {
             player.isReady = false;
             client.send("stake_required", {
               message:
-                "Not enough unified balance for this stake. Settle or fund unified balance first.",
+                result.error ??
+                "Deposit verification failed. Please deposit your stake and try again.",
               requiredMicro: this.state.stakeAmountMicro,
             });
             return;
           }
         } catch (err) {
           console.error(
-            `[KartfallRoom] Stake check failed for ${client.sessionId}:`,
+            `[KartfallRoom] Deposit verification failed for ${client.sessionId}:`,
             err,
           );
           player.isReady = false;
           client.send("stake_required", {
-            message: "Stake check failed. Try again in a moment.",
+            message: "Deposit verification failed. Try again in a moment.",
           });
           return;
         }
@@ -708,6 +719,7 @@ export class KartfallRoom extends Room {
       });
     }
 
+    let payoutsSettled = false;
     if (env.YELLOW_ENABLED && this.state.channelId) {
       try {
         const { version } = await submitMatchPayouts(
@@ -716,6 +728,7 @@ export class KartfallRoom extends Room {
         );
         await updateChannelVersion(this.state.matchId, version);
         await markChannelSettled(this.state.matchId);
+        payoutsSettled = true;
       } catch (err) {
         console.error("[KartfallRoom] submitMatchPayouts failed:", err);
       }
@@ -735,7 +748,15 @@ export class KartfallRoom extends Room {
         lastUpdated: now,
       }));
 
-      await upsertChannelBalances(balanceRows);
+      // Only write balances when the resize actually succeeded — prevents ghost
+      // unredeemed records and stops a failed match from overwriting a previous
+      // match's valid balance on the same channel.
+      if (payoutsSettled) {
+        const positiveRows = balanceRows.filter((r) => r.unredeemedAmount > 0n);
+        if (positiveRows.length > 0) {
+          await upsertChannelBalances(positiveRows);
+        }
+      }
 
       const stakeBreakdown = {
         totalPool: stakeSummary.totalPool.toString(),

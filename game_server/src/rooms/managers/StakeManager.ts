@@ -8,6 +8,7 @@ import {
 } from "../../services/financial.js";
 import {
   getPlayerAssetBalance,
+  verifyStakeDeposit,
   ASSET_DECIMALS,
   DEFAULT_ASSET,
 } from "../../services/yellow.service.js";
@@ -26,6 +27,12 @@ export class StakeManager {
   private stakePerPlayerWei: bigint;
   private stakedPlayers = new Set<string>(); // wallet addresses that have staked
   private reservedStakeByWallet = new Map<string, bigint>();
+  private verifiedDepositTxs = new Set<string>(); // txHash → already consumed
+  private payoutSummaryCache: {
+    payouts: PlayerPayout[];
+    totalPool: bigint;
+    rake: bigint;
+  } | null = null;
 
   constructor(state: RoomState, stakeAmountUsdc?: number) {
     this.state = state;
@@ -58,6 +65,48 @@ export class StakeManager {
   }
 
   /**
+   * Verify an on-chain deposit transaction and register it as the player's stake.
+   * Prevents the same txHash from being reused across players or matches.
+   */
+  async verifyAndReserveDeposit(
+    walletAddress: string,
+    txHash: string,
+  ): Promise<{ valid: boolean; error?: string }> {
+    if (!env.YELLOW_ENABLED) return { valid: true };
+    if (!walletAddress) return { valid: false, error: "No wallet address" };
+    if (env.NODE_ENV === "development" && !env.YELLOW_PRIVATE_KEY) {
+      return { valid: true }; // bypass in dev/test mode
+    }
+
+    if (!txHash) {
+      return {
+        valid: false,
+        error: "Please deposit your stake first before readying up.",
+      };
+    }
+
+    const txKey = txHash.toLowerCase();
+    if (this.verifiedDepositTxs.has(txKey)) {
+      return {
+        valid: false,
+        error: "This deposit transaction has already been used.",
+      };
+    }
+
+    const result = await verifyStakeDeposit(
+      txHash,
+      walletAddress,
+      this.stakePerPlayerWei,
+    );
+
+    if (result.valid) {
+      this.verifiedDepositTxs.add(txKey);
+    }
+
+    return result;
+  }
+
+  /**
    * Collects a player's stake by depositing into the state channel.
    * Only called for staked games.
    */
@@ -71,6 +120,7 @@ export class StakeManager {
       return;
     }
 
+    this.payoutSummaryCache = null; // invalidate cache when new stake is collected
     this.reserveStake(walletAddress, this.stakePerPlayerWei);
     this.stakedPlayers.add(walletAddress);
   }
@@ -104,6 +154,12 @@ export class StakeManager {
     totalPool: bigint;
     rake: bigint;
   } {
+    // Return cached result if already finalized (prevents double-call from
+    // MatchManager's onFinalizePayouts callback + handleMatchEnd both calling this).
+    if (this.payoutSummaryCache !== null) {
+      return this.payoutSummaryCache;
+    }
+
     const players = this.getNonSpectatorPlayers();
     if (players.length === 0) {
       return { payouts: [], totalPool: 0n, rake: 0n };
@@ -141,7 +197,9 @@ export class StakeManager {
     this.stakedPlayers.clear();
     this.reservedStakeByWallet.clear();
 
-    return { payouts, totalPool, rake };
+    const summary = { payouts, totalPool, rake };
+    this.payoutSummaryCache = summary;
+    return summary;
   }
 
   private reserveStake(walletAddress: string, amountWei: bigint): void {

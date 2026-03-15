@@ -53,6 +53,7 @@ export function useKartfallRoom(
     isSpectator?: boolean;
     gameMode?: string;
     stakeAmount?: number;
+    matchDuration?: number;
     walletAddress?: string;
   } | null,
 ): UseRoomResult {
@@ -147,6 +148,10 @@ export function useKartfallRoom(
 
         if (typeof joinOptions.stakeAmount === "number") {
           opts.stakeAmount = joinOptions.stakeAmount;
+        }
+
+        if (typeof joinOptions.matchDuration === "number") {
+          opts.matchDuration = joinOptions.matchDuration;
         }
 
         if (joinOptions.walletAddress) {

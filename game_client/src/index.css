@@ -1268,6 +1268,13 @@ body {
   animation: border-glow 4s ease-in-out infinite;
 }
 
+.profile-screen-panel {
+  max-height: min(86vh, 900px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .res-title {
   font-family: var(--font-display);
   font-size: 32px;

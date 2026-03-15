@@ -71,7 +71,7 @@ export const ERC20_ABI = [
   },
 ];
 
-type WalletLike = {
+export type WalletLike = {
   getEthereumProvider: () => Promise<unknown>;
   address?: string;
 };
@@ -358,6 +358,53 @@ function orderSignatures(
   const otherIndex = sigs.findIndex((sig) => sig === "0x");
   if (otherIndex >= 0) sigs[otherIndex] = serverSignature;
   return sigs;
+}
+
+/**
+ * Deposit the stake amount into the PLATFORM's custody account.
+ * This is how players fund staked matches: the server pays out winnings
+ * from this pooled custody balance.
+ *
+ * Returns the deposit transaction hash so the server can verify it.
+ */
+export async function depositStake(
+  wallet: WalletLike,
+  status: YellowStatus,
+  stakeAmountUsdc: number,
+): Promise<{ txHash: string }> {
+  if (!stakeAmountUsdc || stakeAmountUsdc <= 0) {
+    throw new Error("Stake amount must be greater than zero.");
+  }
+  if (!status.platformWallet) {
+    throw new Error("Platform wallet address not available. Cannot deposit stake.");
+  }
+  assertStatus(status);
+
+  const web3Provider = await getWeb3Provider(wallet);
+  await ensureChain(web3Provider, status.chainId as number);
+
+  const signer = await web3Provider.getSigner();
+  const playerAddress = await signer.getAddress();
+  const token = new ethers.Contract(status.assetAddress!, ERC20_ABI, signer);
+  const decimals = await token.decimals();
+  const amountWei = ethers.parseUnits(stakeAmountUsdc.toString(), decimals);
+
+  const allowance = await token.allowance(playerAddress, status.custodyAddress);
+  if (allowance < amountWei) {
+    const approveTx = await token.approve(status.custodyAddress, amountWei);
+    await approveTx.wait();
+  }
+
+  const custody = new ethers.Contract(status.custodyAddress!, custodyAbi, signer);
+  // Deposit with owner = platformWallet so funds go to the server's custody balance
+  const depositTx = await custody.deposit(
+    status.platformWallet,
+    status.assetAddress,
+    amountWei,
+  );
+  const txHash = depositTx.hash as string;
+  await depositTx.wait();
+  return { txHash };
 }
 
 export async function depositToChannel(

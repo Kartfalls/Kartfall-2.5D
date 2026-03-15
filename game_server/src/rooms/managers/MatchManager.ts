@@ -18,19 +18,23 @@ export class MatchManager {
   private room: Room;
   private state: RoomState;
   private disposeTimeout: ReturnType<typeof setTimeout> | null = null;
+  private lowPlayerCountAt: number | null = null;
   private onMatchStart: () => void;
   private onMatchEnd: () => void;
+  private onFinalizePayouts?: () => void;
 
   constructor(
     room: Room,
     state: RoomState,
     onMatchStart: () => void,
     onMatchEnd: () => void,
+    onFinalizePayouts?: () => void,
   ) {
     this.room = room;
     this.state = state;
     this.onMatchStart = onMatchStart;
     this.onMatchEnd = onMatchEnd;
+    this.onFinalizePayouts = onFinalizePayouts;
   }
 
   /** Check if all players are ready and can start countdown. */
@@ -85,14 +89,18 @@ export class MatchManager {
         );
       }
 
-      // Check if only 1 or fewer active players left (all others disconnected)
-      const alivePlayers = this.getNonSpectatorPlayers().filter(
-        ([, p]) => p.isAlive,
-      );
       // Note: don't end match just because all died — they respawn.
       // Only end if playerCount dropped to <= 1 from disconnections.
+      // Use a 6-second grace period so a briefly-disconnecting player
+      // doesn't immediately kill the match before they can reconnect.
       if (this.state.playerCount <= 1) {
-        this.transitionTo("finished");
+        if (this.lowPlayerCountAt === null) {
+          this.lowPlayerCountAt = now;
+        } else if (now - this.lowPlayerCountAt >= 6000) {
+          this.transitionTo("finished");
+        }
+      } else {
+        this.lowPlayerCountAt = null;
       }
     }
   }
@@ -107,6 +115,7 @@ export class MatchManager {
       clearTimeout(this.disposeTimeout);
       this.disposeTimeout = null;
     }
+    this.lowPlayerCountAt = null;
   }
 
   // ── Private ──
@@ -141,6 +150,7 @@ export class MatchManager {
       }
 
       case "playing": {
+        this.lowPlayerCountAt = null; // reset grace timer on each new match
         const now = Date.now();
         this.state.matchStartsAt = now;
         this.state.matchEndsAt = now + this.matchDurationSec * 1000;
@@ -192,6 +202,10 @@ export class MatchManager {
       case "finished": {
         // Calculate final scores and populate leaderboard
         this.populateLeaderboard();
+
+        // Finalize payouts (e.g. stake shares) so payoutMicro is set on
+        // each leaderboard entry before the broadcast reaches clients.
+        this.onFinalizePayouts?.();
 
         this.room.broadcast("game_finished", {
           winnerId: this.state.winnerPlayerId,

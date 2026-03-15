@@ -1,3 +1,10 @@
+// Polyfill Buffer for browser — required by Privy embedded wallet and
+// some ethers/nitrolite internals that reference the Node.js Buffer global.
+import { Buffer } from "buffer";
+if (typeof globalThis.Buffer === "undefined") {
+  (globalThis as any).Buffer = Buffer;
+}
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { PrivyProvider } from "@privy-io/react-auth";

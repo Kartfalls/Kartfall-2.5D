@@ -9,4 +9,8 @@ export default defineConfig({
   build: {
     target: "es2020",
   },
+  define: {
+    // Some Web3 dependencies reference the Node.js `global` object.
+    global: "globalThis",
+  },
 });

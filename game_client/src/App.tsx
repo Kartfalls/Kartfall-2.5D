@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { depositStake, type WalletLike } from "./net/yellowWallet";
 import { PhaserGame } from "./game/PhaserGame";
 import { LobbyScreen } from "./ui/LobbyScreen";
 import { LoadingScreen } from "./ui/LoadingScreen";
@@ -32,6 +33,7 @@ export default function App() {
     isSpectator?: boolean;
     gameMode?: string;
     stakeAmount?: number;
+    matchDuration?: number;
     walletAddress?: string;
   } | null>(null);
 
@@ -144,6 +146,7 @@ export default function App() {
       isSpectator?: boolean,
       gameMode?: string,
       stakeAmount?: number,
+      matchDuration?: number,
     ) => {
       // Persist the selected name before creating/joining
       await updateName(name);
@@ -153,6 +156,7 @@ export default function App() {
         isSpectator,
         gameMode,
         stakeAmount,
+        matchDuration,
         walletAddress: activeWalletAddress ?? undefined,
       });
     },
@@ -236,6 +240,14 @@ export default function App() {
           <LobbyOverlay
             room={room as Room}
             onLeave={handleLeave}
+            activeWallet={
+              wallets?.find(
+                (w) =>
+                  w?.address?.toLowerCase() ===
+                  activeWalletAddress?.toLowerCase(),
+              ) ?? null
+            }
+            token={token}
           />
         )}
 
@@ -295,18 +307,29 @@ interface PlayerInfo {
   colorIndex: number;
 }
 
+function getHttpEndpoint() {
+  const wsUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
+  return wsUrl.replace(/^ws(s?):/, "http$1:");
+}
+
 function LobbyOverlay({
   room,
   onLeave,
+  activeWallet,
+  token,
 }: {
   room: Room;
   onLeave: () => void;
+  activeWallet?: WalletLike | null;
+  token?: string | null;
 }) {
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [roomCode, setRoomCode] = useState("");
   const [gameMode, setGameMode] = useState("free");
+  const [stakeAmountMicro, setStakeAmountMicro] = useState(0);
   const [myReady, setMyReady] = useState(false);
   const [stakeError, setStakeError] = useState<string | null>(null);
+  const [isDepositing, setIsDepositing] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -339,12 +362,14 @@ function LobbyOverlay({
     // Initial sync
     if (state.roomCode) setRoomCode(state.roomCode);
     if (state.gameMode) setGameMode(state.gameMode);
+    setStakeAmountMicro(state.stakeAmountMicro ?? 0);
     syncPlayers();
 
     // Listen for state changes
     const handler = () => {
       if (state.roomCode) setRoomCode(state.roomCode);
       if (state.gameMode) setGameMode(state.gameMode);
+      setStakeAmountMicro(state.stakeAmountMicro ?? 0);
       syncPlayers();
     };
 
@@ -365,9 +390,45 @@ function LobbyOverlay({
     };
   }, [room]);
 
-  const handleReady = () => {
-    room.send("ready", {});
-    setStakeError(null);
+  const handleReady = async () => {
+    if (gameMode === "staked" && activeWallet && token) {
+      setIsDepositing(true);
+      setStakeError(null);
+      try {
+        const walletAddr = activeWallet.address ?? "";
+        const base = getHttpEndpoint();
+        const resp = await fetch(
+          `${base}/api/yellow/status${walletAddr ? `?walletAddress=${encodeURIComponent(walletAddr)}` : ""}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!resp.ok) throw new Error("Could not fetch staking configuration");
+        const yellowStatus = await resp.json();
+
+        if (!yellowStatus.stakingAvailable) {
+          throw new Error(
+            "Staking is not available right now. Check your Yellow setup.",
+          );
+        }
+        if (!yellowStatus.platformWallet) {
+          throw new Error("Platform wallet not configured. Contact support.");
+        }
+
+        const stakeAmountUsdc = stakeAmountMicro / 1_000_000;
+        const { txHash } = await depositStake(
+          activeWallet,
+          yellowStatus,
+          stakeAmountUsdc,
+        );
+        room.send("ready", { txHash });
+      } catch (err: any) {
+        setStakeError(err?.message ?? "Deposit failed. Please try again.");
+      } finally {
+        setIsDepositing(false);
+      }
+    } else {
+      room.send("ready", {});
+      setStakeError(null);
+    }
   };
 
   const handleUnready = () => {
@@ -388,11 +449,13 @@ function LobbyOverlay({
   const activePlayers = players.filter((p) => !p.isSpectator);
   const spectators = players.filter((p) => p.isSpectator);
   const readyLocked = gameMode === "staked" && !!stakeError && !myReady;
-  const readyLabel = myReady
-    ? "⏸ UNREADY"
-    : readyLocked
-      ? "⛔ NEED STAKE"
-      : "✅ READY UP";
+  const readyLabel = isDepositing
+    ? "⏳ DEPOSITING..."
+    : myReady
+      ? "⏸ UNREADY"
+      : readyLocked
+        ? "⛔ NEED STAKE"
+        : "✅ READY UP";
 
   return (
     <div className="overlay lov-root">
@@ -491,13 +554,16 @@ function LobbyOverlay({
             <button
               className={`lov-btn ${myReady ? "lov-btn-unready" : "lov-btn-ready"}`}
               onClick={myReady ? handleUnready : handleReady}
+              disabled={isDepositing}
               style={
-                readyLocked
-                  ? {
-                      background: "rgba(255, 59, 59, 0.2)",
-                      borderColor: "rgba(255, 59, 59, 0.6)",
-                    }
-                  : undefined
+                isDepositing
+                  ? { opacity: 0.6, cursor: "not-allowed" }
+                  : readyLocked
+                    ? {
+                        background: "rgba(255, 59, 59, 0.2)",
+                        borderColor: "rgba(255, 59, 59, 0.6)",
+                      }
+                    : undefined
               }
             >
               {readyLabel}
