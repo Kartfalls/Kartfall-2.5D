@@ -1,119 +1,287 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Room } from "@colyseus/sdk";
+import { EventBus } from "../game/EventBus";
 
 interface BettingPanelProps {
   room: Room;
 }
 
-/**
- * Spectator prediction market panel.
- * Only renders when the local player is a spectator.
- */
-export function BettingPanel({ room }: BettingPanelProps) {
-  const [selectedPlayer, setSelectedPlayer] = useState<string>("");
-  const [betAmount, setBetAmount] = useState("");
-  const [marketType] = useState("next_kill");
+interface PlayerOdds {
+  id: string;
+  name: string;
+  kills: number;
+  deaths: number;
+  score: number;
+  isAlive: boolean;
+  prob: number; // 0-1
+}
 
-  // Check if local user is spectator
+interface MyBet {
+  marketType: string;
+  targetPlayerId: string;
+  targetName: string;
+  amount: number;
+  placedAt: number;
+}
+
+const QUICK_AMOUNTS = [0.5, 1, 2, 5];
+
+function calcOdds(players: Omit<PlayerOdds, "prob">[]): PlayerOdds[] {
+  const totalScore = players.reduce((s, p) => s + Math.max(p.score, 0), 0);
+  if (totalScore === 0) {
+    const eq = 1 / Math.max(players.length, 1);
+    return players.map((p) => ({ ...p, prob: eq }));
+  }
+  return players.map((p) => ({
+    ...p,
+    prob: Math.max(p.score, 0) / totalScore,
+  }));
+}
+
+function probToMultiplier(prob: number): string {
+  if (prob <= 0) return "—";
+  const m = 1 / prob;
+  return `${(m * 0.96).toFixed(2)}x`; // 4% rake
+}
+
+type MarketTab = "next_kill" | "match_winner";
+
+export function BettingPanel({ room }: BettingPanelProps) {
+  const [tab, setTab] = useState<MarketTab>("next_kill");
+  const [selectedPlayer, setSelectedPlayer] = useState<string>("");
+  const [betAmount, setBetAmount] = useState<string>("");
+  const [myBets, setMyBets] = useState<MyBet[]>([]);
+  const [recentKill, setRecentKill] = useState<string | null>(null);
+  const [players, setPlayers] = useState<PlayerOdds[]>([]);
+  const [betMsg, setBetMsg] = useState<string | null>(null);
+
+  // Spectator check
   const state = room.state as any;
   const localPlayer = state.players?.get(room.sessionId);
   if (localPlayer && !localPlayer.isSpectator) return null;
 
+  // Refresh player list + odds every state change
+  useEffect(() => {
+    const refresh = () => {
+      const raw: Omit<PlayerOdds, "prob">[] = [];
+      state.players?.forEach((p: any, id: string) => {
+        if (!p.isSpectator) {
+          raw.push({
+            id,
+            name: p.name || id.slice(0, 6),
+            kills: p.kills ?? 0,
+            deaths: p.deaths ?? 0,
+            score: p.score ?? p.kills ?? 0,
+            isAlive: p.isAlive ?? true,
+          });
+        }
+      });
+      setPlayers(calcOdds(raw));
+    };
+    refresh();
+    room.onStateChange(refresh);
+  }, [room]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Recent kill feed
+  useEffect(() => {
+    const onKill = (data: { killerId: string }) => {
+      const killerName =
+        (room.state as any).players?.get(data.killerId)?.name ||
+        data.killerId.slice(0, 6);
+      setRecentKill(`⚔️ ${killerName} got a kill!`);
+      const t = setTimeout(() => setRecentKill(null), 3000);
+      return () => clearTimeout(t);
+    };
+    EventBus.on("kill-feed", onKill);
+    return () => EventBus.off("kill-feed", onKill);
+  }, [room]);
+
   const handlePlaceBet = () => {
-    if (!selectedPlayer || !betAmount) return;
-    const amountMicro = Math.floor(parseFloat(betAmount) * 1_000_000);
-    if (amountMicro <= 0) return;
+    const amount = parseFloat(betAmount);
+    if (!selectedPlayer || !amount || amount <= 0) return;
+    const amountMicro = Math.floor(amount * 1_000_000);
 
     room.send("place_bet", {
-      marketType,
+      marketType: tab,
       targetPlayerId: selectedPlayer,
       amount: amountMicro,
     });
 
+    const targetName =
+      players.find((p) => p.id === selectedPlayer)?.name ?? "???";
+    setMyBets((prev) => [
+      ...prev,
+      {
+        marketType: tab,
+        targetPlayerId: selectedPlayer,
+        targetName,
+        amount,
+        placedAt: Date.now(),
+      },
+    ]);
+
+    setBetMsg(`✅ Bet ${amount} USDC on ${targetName}`);
+    setTimeout(() => setBetMsg(null), 3000);
     setSelectedPlayer("");
     setBetAmount("");
   };
 
-  // Gather player list
-  const players: { id: string; name: string }[] = [];
-  state.players?.forEach((p: any, id: string) => {
-    if (!p.isSpectator) {
-      players.push({ id, name: p.name || id.slice(0, 6) });
-    }
-  });
+  const selectedPlayerData = players.find((p) => p.id === selectedPlayer);
+  const potentialPayout =
+    selectedPlayerData && parseFloat(betAmount) > 0
+      ? (parseFloat(betAmount) / selectedPlayerData.prob) * 0.96
+      : null;
+
+  const totalWagered = myBets.reduce((s, b) => s + b.amount, 0);
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: 60,
-        left: 16,
-        width: 220,
-        zIndex: 30,
-        pointerEvents: "auto",
-      }}
-    >
-      <div className="card" style={{ padding: 12 }}>
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--cyan)",
-            letterSpacing: 2,
-            marginBottom: 10,
-            textTransform: "uppercase",
-          }}
+    <div className="bet-panel">
+      {/* Header */}
+      <div className="bet-header">
+        <div className="bet-title">
+          <span className="bet-title-icon">📊</span>
+          PREDICTION MARKET
+        </div>
+        {recentKill && (
+          <div className="bet-kill-flash">{recentKill}</div>
+        )}
+      </div>
+
+      {/* Market tabs */}
+      <div className="bet-tabs">
+        <button
+          className={`bet-tab${tab === "next_kill" ? " active" : ""}`}
+          onClick={() => setTab("next_kill")}
         >
-          Prediction Market
-        </div>
+          ⚔️ Next Kill
+        </button>
+        <button
+          className={`bet-tab${tab === "match_winner" ? " active" : ""}`}
+          onClick={() => setTab("match_winner")}
+        >
+          🏆 Winner
+        </button>
+      </div>
 
-        <div style={{ fontSize: 10, color: "var(--grey)", marginBottom: 8 }}>
-          Next Kill:
-        </div>
+      {/* Market type label */}
+      <div className="bet-market-label">
+        {tab === "next_kill"
+          ? "Who gets the next kill?"
+          : "Who wins the match?"}
+      </div>
 
+      {/* Player odds cards */}
+      <div className="bet-odds-list">
         {players.map((p) => (
           <div
             key={p.id}
-            onClick={() => setSelectedPlayer(p.id)}
-            style={{
-              padding: "4px 8px",
-              fontSize: 11,
-              cursor: "pointer",
-              background:
-                selectedPlayer === p.id
-                  ? "rgba(229, 255, 0, 0.1)"
-                  : "transparent",
-              border:
-                selectedPlayer === p.id
-                  ? "1px solid var(--primary)"
-                  : "1px solid var(--border)",
-              marginBottom: 4,
-            }}
+            className={`bet-odds-card${selectedPlayer === p.id ? " selected" : ""}${!p.isAlive ? " dead" : ""}`}
+            onClick={() => p.isAlive && setSelectedPlayer(p.id === selectedPlayer ? "" : p.id)}
           >
-            {p.name}
+            <div className="bet-odds-player">
+              <span className={`bet-alive-dot${p.isAlive ? " alive" : ""}`} />
+              <span className="bet-odds-name">{p.name}</span>
+              {!p.isAlive && <span className="bet-dead-tag">DEAD</span>}
+            </div>
+
+            <div className="bet-odds-stats">
+              <span className="bet-stat">⚔️ {p.kills}</span>
+              <span className="bet-stat">💀 {p.deaths}</span>
+            </div>
+
+            {/* Probability bar */}
+            <div className="bet-prob-row">
+              <div className="bet-prob-bar">
+                <div
+                  className="bet-prob-fill"
+                  style={{ width: `${(p.prob * 100).toFixed(1)}%` }}
+                />
+              </div>
+              <span className="bet-prob-pct">{(p.prob * 100).toFixed(0)}%</span>
+            </div>
+
+            <div className="bet-multiplier">{probToMultiplier(p.prob)}</div>
           </div>
         ))}
+      </div>
 
-        <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
-          <input
-            className="input"
-            type="number"
-            placeholder="USDC"
-            value={betAmount}
-            onChange={(e) => setBetAmount(e.target.value)}
-            style={{ flex: 1, fontSize: 11 }}
-            min="0.01"
-            step="0.01"
-          />
+      {/* Bet input */}
+      {selectedPlayer && (
+        <div className="bet-input-section">
+          <div className="bet-input-label">
+            Betting on{" "}
+            <strong>{selectedPlayerData?.name}</strong>
+          </div>
+
+          {/* Quick amounts */}
+          <div className="bet-quick-amounts">
+            {QUICK_AMOUNTS.map((a) => (
+              <button
+                key={a}
+                className={`bet-quick-btn${parseFloat(betAmount) === a ? " active" : ""}`}
+                onClick={() => setBetAmount(String(a))}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
+
+          <div className="bet-input-row">
+            <input
+              className="bet-input"
+              type="number"
+              placeholder="Amount (USDC)"
+              value={betAmount}
+              onChange={(e) => setBetAmount(e.target.value)}
+              min="0.01"
+              step="0.01"
+            />
+            <span className="bet-input-currency">USDC</span>
+          </div>
+
+          {potentialPayout !== null && (
+            <div className="bet-potential">
+              Potential win:{" "}
+              <strong style={{ color: "#00c87a" }}>
+                +{potentialPayout.toFixed(2)} USDC
+              </strong>
+            </div>
+          )}
+
           <button
-            className="btn"
+            className="bet-place-btn"
             onClick={handlePlaceBet}
-            disabled={!selectedPlayer || !betAmount}
-            style={{ fontSize: 10, padding: "4px 10px" }}
+            disabled={!betAmount || parseFloat(betAmount) <= 0}
           >
-            BET
+            Place Bet
           </button>
         </div>
-      </div>
+      )}
+
+      {betMsg && <div className="bet-confirm-msg">{betMsg}</div>}
+
+      {/* My positions */}
+      {myBets.length > 0 && (
+        <div className="bet-positions">
+          <div className="bet-positions-title">
+            MY BETS{" "}
+            <span className="bet-positions-total">
+              {totalWagered.toFixed(2)} USDC wagered
+            </span>
+          </div>
+          {myBets.slice(-3).map((b, i) => (
+            <div key={i} className="bet-position-row">
+              <span className="bet-position-market">
+                {b.marketType === "next_kill" ? "⚔️" : "🏆"}
+              </span>
+              <span className="bet-position-name">{b.targetName}</span>
+              <span className="bet-position-amount">
+                {b.amount.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

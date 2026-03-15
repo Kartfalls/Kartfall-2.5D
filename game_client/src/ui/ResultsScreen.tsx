@@ -16,10 +16,8 @@ interface ResultsScreenProps {
   onLeave: () => void;
 }
 
-/**
- * Premium arcade-styled Results Screen.
- * Appears over the game canvas when the match concludes.
- */
+const RANK_MEDALS = ["🥇", "🥈", "🥉"];
+
 export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
   const [results, setResults] = useState<{
     winnerName: string;
@@ -36,17 +34,13 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
         rakeAmount: data.rakeAmount ?? 0,
       });
     };
-
     EventBus.on("game-finished", onFinished);
-    return () => {
-      EventBus.off("game-finished", onFinished);
-    };
+    return () => EventBus.off("game-finished", onFinished);
   }, []);
 
   // Fallback: read from room state if game-finished was missed
   useEffect(() => {
     if (results) return;
-
     const state = room.state as any;
     if (state.leaderboard?.length > 0) {
       const entries: LeaderboardEntryData[] = [];
@@ -60,37 +54,52 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
           payoutMicro: e.payoutMicro ?? 0,
         });
       });
-      setResults({
-        winnerName: entries[0]?.name ?? "Unknown",
-        leaderboard: entries,
-        rakeAmount: 0,
-      });
+      setResults({ winnerName: entries[0]?.name ?? "Unknown", leaderboard: entries, rakeAmount: 0 });
     }
   }, [room, results]);
 
   const handlePlayAgain = () => {
     EventBus.emit("return-to-menu");
-    onLeave(); // Disconnects from current room and drops React out of connected state
+    onLeave();
   };
+
+  const myRank = results?.leaderboard.findIndex(
+    (e) => e.playerId === room.sessionId,
+  ) ?? -1;
+  const isWinner = myRank === 0;
 
   return (
     <div className="res-root">
-      {/* Background decorations matched to lobby */}
-      <div className="lobby-scanlines" style={{ zIndex: -1, opacity: 0.5 }} />
+      <div className="lobby-scanlines" style={{ zIndex: -1, opacity: 0.4 }} />
       <div className="lobby-vignette" style={{ zIndex: -1 }} />
 
       <div className="res-panel">
-        {/* Corner accents (re-using lobby styling) */}
         <div className="lobby-corner lobby-corner--tl" />
         <div className="lobby-corner lobby-corner--tr" />
         <div className="lobby-corner lobby-corner--bl" />
         <div className="lobby-corner lobby-corner--br" />
 
-        <h2 className="res-title">MATCH OVER</h2>
+        {/* Header */}
+        {results ? (
+          <div className={isWinner ? "res-outcome res-outcome--win" : "res-outcome res-outcome--loss"}>
+            <div className="res-outcome-icon">{isWinner ? "🏆" : "💀"}</div>
+            <div className="res-outcome-text">
+              {isWinner ? "VICTORY" : myRank === -1 ? "MATCH OVER" : "DEFEAT"}
+            </div>
+            {!isWinner && myRank >= 0 && (
+              <div className="res-outcome-rank">#{myRank + 1} PLACE</div>
+            )}
+          </div>
+        ) : (
+          <h2 className="res-title">MATCH OVER</h2>
+        )}
 
         {results ? (
           <>
-            <h3 className="res-subtitle">🏆 CHAMPION: {results.winnerName}</h3>
+            <div className="res-champion-banner">
+              <span className="res-champion-label">CHAMPION</span>
+              <span className="res-champion-name">{results.winnerName}</span>
+            </div>
 
             <div className="res-table-container">
               <table className="res-table">
@@ -101,48 +110,40 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
                     <th>SCORE</th>
                     <th>K</th>
                     <th>D</th>
-                    <th style={{ textAlign: "right", paddingRight: "24px" }}>
-                      PAYOUT
-                    </th>
+                    <th style={{ textAlign: "right", paddingRight: 24 }}>PAYOUT</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {results.leaderboard.map((entry, index) => {
-                    const isWinner = index === 0;
+                  {results.leaderboard.map((entry, i) => {
+                    const isMe = entry.playerId === room.sessionId;
                     return (
                       <tr
                         key={entry.playerId}
-                        className={isWinner ? "res-winner" : ""}
+                        className={`res-row-anim${i === 0 ? " res-winner" : ""}${isMe ? " res-row--me" : ""}`}
+                        style={{ animationDelay: `${i * 80}ms` }}
                       >
-                        <td style={{ fontWeight: isWinner ? 800 : 400 }}>
-                          #{index + 1}
-                        </td>
-                        <td
-                          style={{
-                            textAlign: "left",
-                            fontWeight: isWinner ? 700 : 400,
-                          }}
-                        >
-                          {entry.name}
-                          {entry.playerId === room.sessionId && (
-                            <span
-                              className="lov-you-tag"
-                              style={{ marginLeft: "8px" }}
-                            >
-                              YOU
-                            </span>
+                        <td className="res-rank-cell">
+                          {i < 3 ? (
+                            <span className="res-medal">{RANK_MEDALS[i]}</span>
+                          ) : (
+                            `#${i + 1}`
                           )}
                         </td>
-                        <td>{entry.score}</td>
-                        <td style={{ color: "var(--grey)" }}>{entry.kills}</td>
+                        <td style={{ textAlign: "left" }}>
+                          {entry.name}
+                          {isMe && <span className="lov-you-tag" style={{ marginLeft: 8 }}>YOU</span>}
+                        </td>
+                        <td style={{ fontWeight: i === 0 ? 700 : 400 }}>{entry.score}</td>
+                        <td style={{ color: "var(--success)" }}>{entry.kills}</td>
                         <td style={{ color: "var(--grey)" }}>{entry.deaths}</td>
-                        <td
-                          className="res-payout"
-                          style={{ paddingRight: "24px" }}
-                        >
-                          {entry.payoutMicro > 0
-                            ? `+ ${(entry.payoutMicro / 1_000_000).toFixed(2)} USDC`
-                            : "-"}
+                        <td className="res-payout" style={{ paddingRight: 24 }}>
+                          {entry.payoutMicro > 0 ? (
+                            <span className="res-payout--positive">
+                              +{(entry.payoutMicro / 1_000_000).toFixed(2)} USDC
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--grey)" }}>—</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -151,55 +152,42 @@ export function ResultsScreen({ room, onLeave }: ResultsScreenProps) {
               </table>
             </div>
 
-            {results.rakeAmount > 0 ? (
-              <div className="res-metrics">
-                <span className="res-metric-item">PLATFORM RAKE (4%)</span>
-                <span
-                  className="res-metric-item"
-                  style={{ color: "var(--primary)" }}
-                >
-                  {(results.rakeAmount / 1_000_000).toFixed(2)} USDC
-                </span>
-              </div>
-            ) : (
-              <div className="res-metrics">
-                <span className="res-metric-item">
-                  GAME MODE: {roomGameMode === "staked" ? "STAKED" : "FREEPLAY"}
-                </span>
-                <span className="res-metric-item">
-                  {roomGameMode === "staked"
-                    ? "STAKE CHANNEL NOT SETTLED"
-                    : "READY UP FOR NEXT MATCH"}
-                </span>
-              </div>
-            )}
+            <div className="res-metrics">
+              {results.rakeAmount > 0 ? (
+                <>
+                  <span className="res-metric-item">PLATFORM RAKE (4%)</span>
+                  <span className="res-metric-item" style={{ color: "var(--primary)" }}>
+                    {(results.rakeAmount / 1_000_000).toFixed(2)} USDC
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="res-metric-item">
+                    {roomGameMode === "staked" ? "🔒 STAKED" : "🎮 FREEPLAY"}
+                  </span>
+                  <span className="res-metric-item">
+                    {roomGameMode === "staked" ? "Redeem winnings in Profile" : ""}
+                  </span>
+                </>
+              )}
+            </div>
           </>
         ) : (
-          <div
-            style={{
-              padding: "40px",
-              color: "var(--grey)",
-              letterSpacing: "2px",
-            }}
-          >
-            CALCULATING RESULTS...
+          <div className="res-loading">
+            <div className="res-loading-dots">
+              <span /><span /><span />
+            </div>
+            CALCULATING RESULTS
           </div>
         )}
 
-        {/* Action Buttons */}
         <div className="res-actions">
-          <button
-            className="btn res-btn lov-btn-ready"
-            onClick={handlePlayAgain}
-          >
+          <button className="btn res-btn lov-btn-ready" onClick={handlePlayAgain}>
             ⚔️ PLAY AGAIN
           </button>
           <button
             className="btn res-btn lov-btn-leave"
-            onClick={() => {
-              EventBus.emit("return-to-menu");
-              onLeave();
-            }}
+            onClick={() => { EventBus.emit("return-to-menu"); onLeave(); }}
           >
             🚪 MAIN MENU
           </button>

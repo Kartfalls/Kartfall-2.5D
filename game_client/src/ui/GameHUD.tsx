@@ -1,11 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Room } from "@colyseus/sdk";
 import { EventBus } from "../game/EventBus";
 import {
   isAudioEnabled,
   readAudioSettings,
   writeAudioSettings,
+  AUDIO_KEYS,
 } from "../game/audio";
+import {
+  synthSetMuted,
+  synthUnlock,
+  sfxAttack,
+  sfxExplosion,
+  sfxHit,
+  sfxPickup,
+  sfxKill,
+  sfxRespawn,
+  sfxCountdown,
+  startMusic,
+  stopMusic,
+} from "../game/synth";
 
 interface HUDData {
   hp: number;
@@ -21,9 +35,14 @@ interface GameHUDProps {
   room: Room;
 }
 
-/**
- * In-game HUD overlay — HP, timer, K/D, weapon slot.
- */
+const WEAPON_ICONS: Record<string, string> = {
+  bullet: "🔫",
+  rocket: "🚀",
+  bomb: "💣",
+};
+
+const WEAPON_MAX_MS = 30_000;
+
 export function GameHUD({ room }: GameHUDProps) {
   const [hud, setHud] = useState<HUDData>({
     hp: 100,
@@ -42,13 +61,71 @@ export function GameHUD({ room }: GameHUDProps) {
   const [muted, setMuted] = useState(() => readAudioSettings().muted);
   const [fps, setFps] = useState<number | null>(null);
   const audioEnabled = isAudioEnabled();
+  const mutedRef = useRef(muted);
 
+  // Keep ref in sync
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  // ── Synth audio integration ──
+  useEffect(() => {
+    synthUnlock();
+    startMusic();
+
+    const onSfx = (key: string) => {
+      if (mutedRef.current) return;
+      switch (key) {
+        case AUDIO_KEYS.SFX_EXPLOSION:
+          sfxExplosion();
+          break;
+        case AUDIO_KEYS.SFX_HIT:
+          sfxHit();
+          break;
+        case AUDIO_KEYS.SFX_PICKUP:
+          sfxPickup();
+          break;
+        case AUDIO_KEYS.SFX_KILL:
+          sfxKill();
+          break;
+        case AUDIO_KEYS.SFX_RESPAWN:
+          sfxRespawn();
+          break;
+        case AUDIO_KEYS.SFX_COUNTDOWN:
+          sfxCountdown();
+          break;
+        case AUDIO_KEYS.SFX_ATTACK:
+          // handled by sfx-weapon for weapon-specific sound
+          break;
+      }
+    };
+
+    const onSfxWeapon = (weaponType: string) => {
+      if (mutedRef.current) return;
+      sfxAttack(weaponType);
+    };
+
+    EventBus.on("sfx", onSfx);
+    EventBus.on("sfx-weapon", onSfxWeapon);
+
+    return () => {
+      EventBus.off("sfx", onSfx);
+      EventBus.off("sfx-weapon", onSfxWeapon);
+      stopMusic();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync mute to synth
+  useEffect(() => {
+    synthSetMuted(muted);
+  }, [muted]);
+
+  // ── HUD + kill feed events ──
   useEffect(() => {
     const onUpdate = (data: HUDData) => setHud(data);
     const onKill = (data: { killerId: string; victimId: string }) => {
       const entry = { ...data, id: Date.now() };
       setKillFeed((prev) => [...prev.slice(-4), entry]);
-      // Auto-remove after 4s
       setTimeout(() => {
         setKillFeed((prev) => prev.filter((e) => e.id !== entry.id));
       }, 4000);
@@ -56,60 +133,47 @@ export function GameHUD({ room }: GameHUDProps) {
 
     EventBus.on("hud-update", onUpdate);
     EventBus.on("kill-feed", onKill);
-
     return () => {
       EventBus.off("hud-update", onUpdate);
       EventBus.off("kill-feed", onKill);
     };
   }, []);
 
+  // ── FPS counter ──
   useEffect(() => {
     let raf = 0;
-    let last = performance.now();
     let frames = 0;
-    let lastReport = last;
+    let lastReport = performance.now();
 
     const loop = (now: number) => {
       frames++;
-      const dt = now - last;
-      last = now;
-
-      // Report about every ~0.5s for stability
       if (now - lastReport >= 500) {
-        const elapsed = now - lastReport;
-        const computed = Math.round((frames * 1000) / Math.max(1, elapsed));
-        setFps(computed);
+        setFps(Math.round((frames * 1000) / Math.max(1, now - lastReport)));
         frames = 0;
         lastReport = now;
       }
-
-      // Avoid unused var lint; keep dt for possible future smoothing
-      void dt;
       raf = requestAnimationFrame(loop);
     };
-
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   const timeStr = useMemo(() => {
-    const minutes = Math.floor(hud.remainingSeconds / 60);
-    const seconds = hud.remainingSeconds % 60;
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    const m = Math.floor(hud.remainingSeconds / 60);
+    const s = hud.remainingSeconds % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }, [hud.remainingSeconds]);
 
   const hpPercent = Math.max(0, Math.min(100, hud.hp));
   const hpColor =
-    hpPercent > 60
-      ? "var(--success)"
-      : hpPercent > 30
-        ? "#FFB800"
-        : "var(--danger)";
+    hpPercent > 60 ? "#00c87a" : hpPercent > 30 ? "#FFB800" : "#ff3d3d";
 
-  const weaponExpirySec = Math.max(
-    0,
-    Math.ceil((hud.weaponExpiresAt - Date.now()) / 1000),
-  );
+  const isTimerWarn = hud.remainingSeconds <= 30 && hud.remainingSeconds > 10;
+  const isTimerCrit = hud.remainingSeconds <= 10 && hud.remainingSeconds > 0;
+
+  const weaponRemainMs = Math.max(0, hud.weaponExpiresAt - Date.now());
+  const weaponExpirySec = Math.ceil(weaponRemainMs / 1000);
+  const weaponPercent = Math.min(100, (weaponRemainMs / WEAPON_MAX_MS) * 100);
 
   const pingMs: number | null = useMemo(() => {
     const anyRoom = room as any;
@@ -118,106 +182,61 @@ export function GameHUD({ room }: GameHUDProps) {
       anyRoom?.connection?.latency ??
       anyRoom?.connection?.ping ??
       null;
-    return typeof rtt === "number" && Number.isFinite(rtt) ? Math.round(rtt) : null;
+    return typeof rtt === "number" && Number.isFinite(rtt)
+      ? Math.round(rtt)
+      : null;
   }, [room]);
+
+  const handleMuteToggle = () => {
+    if (!audioEnabled) return;
+    const next = !muted;
+    setMuted(next);
+    writeAudioSettings({ muted: next });
+    EventBus.emit("audio-mute-changed", next);
+  };
+
+  // HP segments (10 bars)
+  const HP_SEGS = 10;
+  const filledSegs = Math.ceil((hpPercent / 100) * HP_SEGS);
 
   return (
     <div className="overlay" style={{ pointerEvents: "none" }}>
-      {/* Top-left: compact K/D (kept away from center status) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 16,
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-        }}
-      >
-        <div
-          className="card"
-          style={{
-            padding: "6px 10px",
-            display: "flex",
-            gap: 10,
-            alignItems: "baseline",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "var(--success)", fontWeight: 700 }}>
-            K {hud.kills}
-          </div>
-          <div style={{ fontSize: 12, color: "var(--danger)", fontWeight: 700 }}>
-            D {hud.deaths}
-          </div>
-        </div>
+      {/* ── Low HP vignette ── */}
+      {hud.hp < 30 && hud.isAlive && (
+        <div className="hud-vignette-low-hp" />
+      )}
+
+      {/* ── Top-left: K/D ── */}
+      <div className="hud-kd">
+        <div className="hud-kd-badge hud-kd-badge--k">⚔️ {hud.kills}</div>
+        <div className="hud-kd-badge hud-kd-badge--d">💀 {hud.deaths}</div>
       </div>
 
-      {/* Top-center: primary status (HP + timer) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 10,
-          left: "50%",
-          transform: "translateX(-50%)",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <div
-          className="card"
-          style={{
-            padding: "10px 12px",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            minWidth: 360,
-            justifyContent: "center",
-          }}
-        >
-          {/* HP bar */}
-          <div style={{ width: 220 }}>
-            <div
-              style={{
-                fontSize: 10,
-                color: "var(--grey)",
-                marginBottom: 4,
-                letterSpacing: 1,
-                textTransform: "uppercase",
-              }}
-            >
-              Health
+      {/* ── Top-center: HP + Timer ── */}
+      <div className="hud-top-center">
+        <div className="card hud-status-card">
+          {/* Health */}
+          <div className="hud-hp-section">
+            <div className="hud-hp-label">
+              <span>HEALTH</span>
+              <span style={{ color: hpColor, fontWeight: 700 }}>{hud.hp}</span>
             </div>
-            <div
-              style={{
-                width: "100%",
-                height: 12,
-                background: "var(--border)",
-                borderRadius: 8,
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${hpPercent}%`,
-                  height: "100%",
-                  background: hpColor,
-                  transition: "width 0.2s",
-                }}
-              />
+            <div className="hud-hp-bar">
+              {Array.from({ length: HP_SEGS }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`hud-hp-seg${i < filledSegs ? " filled" : ""}`}
+                  style={i < filledSegs ? { background: hpColor, boxShadow: `0 0 6px ${hpColor}80` } : undefined}
+                />
+              ))}
             </div>
           </div>
+
+          <div className="hud-divider" />
 
           {/* Timer */}
           <div
-            style={{
-              minWidth: 86,
-              textAlign: "center",
-              fontSize: 22,
-              color: "var(--primary)",
-              fontWeight: 800,
-              letterSpacing: 1,
-            }}
+            className={`hud-timer${isTimerWarn ? " hud-timer--warn" : ""}${isTimerCrit ? " hud-timer--crit" : ""}`}
             aria-label="Remaining time"
           >
             {timeStr}
@@ -225,94 +244,40 @@ export function GameHUD({ room }: GameHUDProps) {
         </div>
       </div>
 
-      {/* Top-right: controls + perf */}
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 16,
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 10,
-          pointerEvents: "auto",
-        }}
-      >
-        <div style={{ textAlign: "right", lineHeight: 1.2 }}>
-          <div style={{ fontSize: 11, color: "var(--white)", fontWeight: 700 }}>
-            FPS: {fps ?? "--"}
-          </div>
-          <div style={{ fontSize: 11, color: "var(--white)", fontWeight: 700 }}>
-            PING: {pingMs ?? "--"}
-          </div>
+      {/* ── Top-right: perf + controls ── */}
+      <div className="hud-top-right" style={{ pointerEvents: "auto" }}>
+        <div className="hud-perf">
+          <div>{fps ?? "--"} FPS</div>
+          <div>{pingMs ?? "--"} ms</div>
         </div>
-
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="hud-icon-btns">
           <button
-            className="card"
+            className="hud-icon-btn"
             type="button"
             title="Profile"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 999,
-              display: "grid",
-              placeItems: "center",
-              padding: 0,
-              cursor: "pointer",
-              color: "var(--white)",
-              pointerEvents: "auto",
-            }}
             onClick={() => EventBus.emit("hud-profile")}
           >
             👤
           </button>
           <button
-            className="card"
+            className="hud-icon-btn"
             type="button"
             title={
               audioEnabled
                 ? muted
                   ? "Unmute"
                   : "Mute"
-                : "Audio disabled (set VITE_ENABLE_AUDIO=true)"
+                : "Audio disabled"
             }
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 999,
-              display: "grid",
-              placeItems: "center",
-              padding: 0,
-              cursor: "pointer",
-              color: "var(--white)",
-              pointerEvents: "auto",
-              opacity: audioEnabled ? 1 : 0.5,
-            }}
-            onClick={() => {
-              if (!audioEnabled) return;
-              const nextMuted = !muted;
-              setMuted(nextMuted);
-              writeAudioSettings({ muted: nextMuted });
-              EventBus.emit("audio-mute-changed", nextMuted);
-            }}
+            style={{ opacity: audioEnabled ? 1 : 0.45 }}
+            onClick={handleMuteToggle}
           >
             {muted ? "🔇" : "🔊"}
           </button>
           <button
-            className="card"
+            className="hud-icon-btn"
             type="button"
-            title="Settings"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 999,
-              display: "grid",
-              placeItems: "center",
-              padding: 0,
-              cursor: "pointer",
-              color: "var(--white)",
-              pointerEvents: "auto",
-            }}
+            title="Menu (Esc)"
             onClick={() => EventBus.emit("hud-settings")}
           >
             ⚙️
@@ -320,66 +285,8 @@ export function GameHUD({ room }: GameHUDProps) {
         </div>
       </div>
 
-      {/* ── Bottom bar ── */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 16,
-          left: 190, // moved to right to make room for minimap
-          display: "flex",
-          gap: 8,
-          alignItems: "flex-end",
-        }}
-      >
-        {/* Weapon slot */}
-        {hud.weaponType !== "none" && (
-          <div
-            className="card"
-            style={{
-              padding: "6px 10px",
-              fontSize: 11,
-              textTransform: "uppercase",
-              color: "var(--cyan)",
-            }}
-          >
-            <div>{hud.weaponType}</div>
-            {weaponExpirySec > 0 && (
-              <div style={{ fontSize: 9, color: "var(--grey)" }}>
-                {weaponExpirySec}s
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Dead overlay ── */}
-      {!hud.isAlive && (
-        <div
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            fontSize: 24,
-            color: "var(--danger)",
-            fontWeight: 700,
-          }}
-        >
-          RESPAWNING...
-        </div>
-      )}
-
       {/* ── Kill feed ── */}
-      <div
-        style={{
-          position: "absolute",
-          top: 64,
-          right: 16,
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-        }}
-      >
+      <div className="hud-killfeed">
         {killFeed.map((entry) => {
           const state = room.state as any;
           const killerName =
@@ -389,21 +296,47 @@ export function GameHUD({ room }: GameHUDProps) {
             state.players.get(entry.victimId)?.name ||
             entry.victimId.slice(0, 6);
           return (
-            <div
-              key={entry.id}
-              style={{
-                fontSize: 10,
-                color: "var(--grey)",
-                background: "rgba(15,15,20,0.8)",
-                padding: "2px 8px",
-              }}
-            >
-              <span style={{ color: "var(--primary)" }}>{killerName}</span> ⚔{" "}
-              <span style={{ color: "var(--danger)" }}>{victimName}</span>
+            <div key={entry.id} className="hud-killfeed-entry">
+              <span className="hud-kf-killer">{killerName}</span>
+              <span className="hud-kf-icon">💀</span>
+              <span className="hud-kf-victim">{victimName}</span>
             </div>
           );
         })}
       </div>
+
+      {/* ── Bottom: weapon slot ── */}
+      {hud.weaponType !== "none" && (
+        <div className="hud-weapon-wrap">
+          <div className="card hud-weapon-card">
+            <div className="hud-weapon-icon">
+              {WEAPON_ICONS[hud.weaponType] ?? "🎯"}
+            </div>
+            <div className="hud-weapon-info">
+              <div className="hud-weapon-name">{hud.weaponType.toUpperCase()}</div>
+              {weaponExpirySec > 0 && (
+                <>
+                  <div className="hud-weapon-timer">{weaponExpirySec}s</div>
+                  <div className="hud-weapon-bar">
+                    <div
+                      className="hud-weapon-bar-fill"
+                      style={{ width: `${weaponPercent}%` }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── RESPAWNING overlay ── */}
+      {!hud.isAlive && (
+        <div className="hud-respawning">
+          <div className="hud-respawning-text">RESPAWNING</div>
+          <div className="hud-respawning-sub">prepare to re-enter</div>
+        </div>
+      )}
     </div>
   );
 }

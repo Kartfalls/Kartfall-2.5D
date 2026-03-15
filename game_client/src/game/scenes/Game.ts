@@ -720,6 +720,7 @@ export class Game extends Phaser.Scene {
       (data: { attackerId: string; weaponType: string }) => {
         if (data.attackerId === this.localSessionId) {
           this.playSfx(AUDIO_KEYS.SFX_ATTACK, 0.7);
+          EventBus.emit("sfx-weapon", data.weaponType);
         }
 
         const kart = this.karts.get(data.attackerId);
@@ -814,6 +815,9 @@ export class Game extends Phaser.Scene {
   }
 
   private playSfx(key: string, volume = 1): void {
+    // Always emit for the synth engine (works without audio files)
+    EventBus.emit("sfx", key);
+
     if (!isAudioEnabled()) return;
     if (this.audioSettings.muted) return;
     if (!this.cache.audio.exists(key)) return;

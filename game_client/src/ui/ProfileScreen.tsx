@@ -28,10 +28,7 @@ function formatToken(amount: bigint, decimals: number) {
   const whole = amount / divisor;
   const fraction = amount % divisor;
   if (fraction === 0n) return whole.toString();
-  const fractionStr = fraction
-    .toString()
-    .padStart(decimals, "0")
-    .replace(/0+$/, "");
+  const fractionStr = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
   return `${whole.toString()}.${fractionStr}`;
 }
 
@@ -39,15 +36,9 @@ function parseTokenToWei(value: string, decimals: number): bigint {
   if (!value) return 0n;
   const [whole, fraction = ""] = value.split(".");
   const cleanWhole = whole ? whole.replace(/\D/g, "") : "0";
-  const cleanFraction = fraction.replace(/\D/g, "");
-  const paddedFraction = cleanFraction
-    .padEnd(decimals, "0")
-    .slice(0, decimals);
+  const paddedFraction = fraction.replace(/\D/g, "").padEnd(decimals, "0").slice(0, decimals);
   try {
-    return (
-      BigInt(cleanWhole || "0") * BigInt(10) ** BigInt(decimals) +
-      BigInt(paddedFraction || "0")
-    );
+    return BigInt(cleanWhole || "0") * BigInt(10) ** BigInt(decimals) + BigInt(paddedFraction || "0");
   } catch {
     return 0n;
   }
@@ -55,8 +46,10 @@ function parseTokenToWei(value: string, decimals: number): bigint {
 
 function shortenAddress(addr: string) {
   if (!addr) return "";
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
+
+type ProfileTab = "overview" | "history";
 
 export function ProfileScreen({
   onBack,
@@ -67,10 +60,11 @@ export function ProfileScreen({
 }: ProfileScreenProps) {
   const { user } = usePrivy();
   const { wallets } = useWallets();
+  const [activeTab, setActiveTab] = useState<ProfileTab>("overview");
+
   const activeWallet =
     wallets?.find(
-      (wallet) =>
-        wallet.address?.toLowerCase() === selectedWalletAddress?.toLowerCase(),
+      (w) => w.address?.toLowerCase() === selectedWalletAddress?.toLowerCase(),
     ) ||
     wallets?.[0] ||
     null;
@@ -81,20 +75,15 @@ export function ProfileScreen({
     wallets?.[0]?.address ||
     "Unknown";
 
-  const {
-    data: historyData,
-    loading: historyLoading,
-    error: historyError,
-    refresh: refreshHistory,
-  } = useMatchHistory(accessToken ?? null, selectedWalletAddress);
+  const { data: historyData, loading: historyLoading, error: historyError, refresh: refreshHistory } =
+    useMatchHistory(accessToken ?? null, selectedWalletAddress);
 
   const assetSymbol = historyData?.asset ?? "TOKEN";
   const assetDecimals = historyData?.assetDecimals ?? 6;
   const walletBalance = historyData?.walletBalance ?? "0";
 
   const totalUnredeemed = useMemo(() => {
-    const rows = historyData?.history ?? [];
-    return rows.reduce(
+    return (historyData?.history ?? []).reduce(
       (sum, row) => sum + toBigInt(row.unredeemed),
       0n,
     );
@@ -105,38 +94,18 @@ export function ProfileScreen({
   const [redeemAllLoading, setRedeemAllLoading] = useState(false);
 
   const redeemMatch = async (matchId: string) => {
-    if (!accessToken) {
-      setRedeemError("Sign in to redeem.");
-      return;
-    }
-    if (!activeWallet) {
-      setRedeemError("Connect a wallet first.");
-      return;
-    }
-
+    if (!accessToken) { setRedeemError("Sign in to redeem."); return; }
+    if (!activeWallet) { setRedeemError("Connect a wallet first."); return; }
     setRedeemingMatchId(matchId);
     setRedeemError(null);
-
     try {
-      const base = getHttpEndpoint();
-      const resp = await fetch(`${base}/api/match/withdraw`, {
+      const resp = await fetch(`${getHttpEndpoint()}/api/match/withdraw`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          matchId,
-          walletAddress: selectedWalletAddress ?? undefined,
-        }),
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ matchId, walletAddress: selectedWalletAddress ?? undefined }),
       });
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data?.error ?? `Withdraw failed (${resp.status})`);
-      }
-
-      // Server handles the full payout (custody withdraw + ERC20 transfer).
-      // No client-side wallet interaction needed.
+      if (!resp.ok) throw new Error(data?.error ?? `Withdraw failed (${resp.status})`);
       await refreshHistory();
     } catch (err: any) {
       setRedeemError(err?.message ?? "Redeem failed");
@@ -146,279 +115,280 @@ export function ProfileScreen({
   };
 
   const redeemAll = async () => {
-    const rows = historyData?.history ?? [];
-    const redeemable = rows.filter(
-      (row) => toBigInt(row.unredeemed) > 0n,
-    );
+    const redeemable = (historyData?.history ?? []).filter((r) => toBigInt(r.unredeemed) > 0n);
     if (!redeemable.length) return;
     setRedeemAllLoading(true);
     setRedeemError(null);
     try {
-      for (const row of redeemable) {
-        await redeemMatch(row.matchId);
-      }
+      for (const row of redeemable) await redeemMatch(row.matchId);
     } finally {
       setRedeemAllLoading(false);
     }
   };
 
-  const totalBalanceDisplay = useMemo(() => {
-    const wallet = parseTokenToWei(walletBalance, assetDecimals);
-    const total = wallet + totalUnredeemed;
-    return formatToken(total, assetDecimals);
-  }, [walletBalance, totalUnredeemed, assetDecimals]);
+  const walletBal = parseTokenToWei(walletBalance, assetDecimals);
+  const totalBalance = walletBal + totalUnredeemed;
+
+  const wins = useMemo(
+    () => (historyData?.history ?? []).filter((r) => toBigInt((r.payouts as any)?.stake) > 0n).length,
+    [historyData?.history],
+  );
+  const totalGames = historyData?.history?.length ?? 0;
 
   return (
-    <div className="res-root" style={{ background: "rgba(8, 8, 9, 0.95)" }}>
-      <div className="lobby-scanlines" style={{ zIndex: -1, opacity: 0.3 }} />
-      <div className="lobby-vignette" style={{ zIndex: -1 }} />
+    <div className="pro-root">
+      <div className="lobby-scanlines" style={{ zIndex: -1, opacity: 0.2 }} />
 
-      <div
-        className="res-panel profile-screen-panel"
-        style={{ minWidth: "520px", maxWidth: "980px" }}
-      >
-        <div className="lobby-corner lobby-corner--tl" />
-        <div className="lobby-corner lobby-corner--tr" />
-        <div className="lobby-corner lobby-corner--bl" />
-        <div className="lobby-corner lobby-corner--br" />
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            width: "100%",
-          }}
-        >
+      <div className="pro-panel">
+        {/* ── Header ── */}
+        <div className="pro-header">
           <div>
-            <h2 className="res-title" style={{ fontSize: "28px" }}>
-              PILOT PROFILE
-            </h2>
-            <p
-              className="res-subtitle"
-              style={{ color: "var(--white)", opacity: 0.7 }}
-            >
-              WALLET:{" "}
-              <span style={{ fontFamily: "monospace", color: "var(--cyan)" }}>
-                {shortenAddress(walletAddress)}
-              </span>
-            </p>
+            <div className="pro-title">PILOT PROFILE</div>
+            <div className="pro-wallet-addr">
+              <span className="pro-wallet-label">WALLET</span>
+              <span className="pro-wallet-value">{shortenAddress(walletAddress)}</span>
+            </div>
           </div>
-          <button className="sk-sub-btn" onClick={onBack}>
-            Back
-          </button>
+          <button className="sk-sub-btn" onClick={onBack}>← Back</button>
         </div>
 
+        {/* ── Wallet selector ── */}
         {walletOptions && walletOptions.length > 1 && (
-          <div style={{ marginBottom: 18, width: "100%" }}>
-            <div
-              style={{
-                fontSize: "10px",
-                color: "var(--grey)",
-                letterSpacing: "1px",
-                marginBottom: 6,
-              }}
-            >
-              ACTIVE WALLET
-            </div>
-            <select
-              value={selectedWalletAddress ?? walletAddress}
-              onChange={(e) => onSelectWallet?.(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.15)",
-                background: "rgba(0,0,0,0.4)",
-                color: "var(--white)",
-                fontFamily: "inherit",
-                fontSize: 12,
-              }}
-            >
-              {walletOptions.map((option) => (
-                <option key={option.address} value={option.address}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            className="pro-wallet-select"
+            value={selectedWalletAddress ?? walletAddress}
+            onChange={(e) => onSelectWallet?.(e.target.value)}
+          >
+            {walletOptions.map((o) => (
+              <option key={o.address} value={o.address}>{o.label}</option>
+            ))}
+          </select>
         )}
 
-        <div
-          style={{
-            width: "100%",
-            padding: "14px 18px",
-            borderRadius: 10,
-            background: "rgba(0,0,0,0.55)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            marginBottom: 18,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 11, color: "var(--grey)" }}>BALANCE</div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                letterSpacing: 0.5,
-              }}
-            >
-              {totalBalanceDisplay} {assetSymbol.toUpperCase()}
+        {/* ── Balance card ── */}
+        <div className="pro-balance-card">
+          <div className="pro-balance-left">
+            <div className="pro-balance-label">TOTAL BALANCE</div>
+            <div className="pro-balance-amount">
+              {formatToken(totalBalance, assetDecimals)}
+              <span className="pro-balance-symbol">{assetSymbol.toUpperCase()}</span>
             </div>
-            <div style={{ fontSize: 11, color: "var(--grey)" }}>
-              {walletBalance} wallet +{" "}
-              {formatToken(totalUnredeemed, assetDecimals)} unredeemed
+            <div className="pro-balance-breakdown">
+              <span className="pro-bal-item">
+                <span className="pro-bal-dot pro-bal-dot--wallet" />
+                {walletBalance} wallet
+              </span>
+              <span className="pro-bal-item">
+                <span className="pro-bal-dot pro-bal-dot--unredeemed" />
+                {formatToken(totalUnredeemed, assetDecimals)} unredeemed
+              </span>
             </div>
           </div>
+          <div className="pro-balance-right">
+            {totalUnredeemed > 0n && (
+              <div className="pro-redeem-badge">
+                🔔 {formatToken(totalUnredeemed, assetDecimals)} {assetSymbol} ready to claim
+              </div>
+            )}
+            <button
+              className="pro-redeem-btn"
+              onClick={() => void redeemAll()}
+              disabled={redeemAllLoading || totalUnredeemed <= 0n}
+            >
+              {redeemAllLoading ? (
+                <span className="pro-spinner" />
+              ) : (
+                "⬇ REDEEM ALL"
+              )}
+            </button>
+          </div>
+        </div>
+
+        {redeemError && <div className="pro-error">{redeemError}</div>}
+
+        {/* ── Quick stats row ── */}
+        <div className="pro-stats-row">
+          <div className="pro-stat-card">
+            <div className="pro-stat-value">{totalGames}</div>
+            <div className="pro-stat-label">MATCHES</div>
+          </div>
+          <div className="pro-stat-card">
+            <div className="pro-stat-value" style={{ color: "#00c87a" }}>{wins}</div>
+            <div className="pro-stat-label">WINS</div>
+          </div>
+          <div className="pro-stat-card">
+            <div className="pro-stat-value" style={{ color: "#e5ff00" }}>
+              {totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0}%
+            </div>
+            <div className="pro-stat-label">WIN RATE</div>
+          </div>
+        </div>
+
+        {/* ── Tabs ── */}
+        <div className="pro-tabs">
           <button
-            className="sk-sub-btn"
-            onClick={() => void redeemAll()}
-            disabled={redeemAllLoading || totalUnredeemed <= 0n}
+            className={`pro-tab${activeTab === "overview" ? " active" : ""}`}
+            onClick={() => setActiveTab("overview")}
           >
-            {redeemAllLoading ? "REDEEMING..." : "REDEEM"}
+            Overview
+          </button>
+          <button
+            className={`pro-tab${activeTab === "history" ? " active" : ""}`}
+            onClick={() => setActiveTab("history")}
+          >
+            Match History
+            {totalGames > 0 && <span className="pro-tab-badge">{totalGames}</span>}
           </button>
         </div>
 
-        {redeemError && (
-          <div style={{ color: "var(--danger)", marginBottom: 12 }}>
-            {redeemError}
+        {/* ── Tab content ── */}
+        {activeTab === "overview" && (
+          <div className="pro-overview">
+            <div className="pro-overview-hint">
+              Stake tokens on staked matches to earn winnings. Redeem from Match History.
+            </div>
+            {totalUnredeemed > 0n ? (
+              <div className="pro-claim-card">
+                <div className="pro-claim-icon">💰</div>
+                <div>
+                  <div className="pro-claim-title">Winnings Available</div>
+                  <div className="pro-claim-amount">
+                    {formatToken(totalUnredeemed, assetDecimals)} {assetSymbol}
+                  </div>
+                </div>
+                <button
+                  className="pro-redeem-btn"
+                  style={{ marginLeft: "auto" }}
+                  onClick={() => void redeemAll()}
+                  disabled={redeemAllLoading}
+                >
+                  {redeemAllLoading ? "..." : "CLAIM"}
+                </button>
+              </div>
+            ) : (
+              <div className="pro-empty-state">
+                <div style={{ fontSize: 32 }}>🏎️</div>
+                <div>No unclaimed winnings. Play a staked match to earn!</div>
+              </div>
+            )}
           </div>
         )}
 
-        <div style={{ width: "100%" }}>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--grey)",
-              letterSpacing: "1px",
-              marginBottom: 8,
-            }}
-          >
-            MATCH HISTORY
-          </div>
-          {historyLoading && (
-            <div style={{ color: "var(--primary)" }}>Loading history...</div>
-          )}
-          {historyError && (
-            <div style={{ color: "var(--danger)" }}>{historyError}</div>
-          )}
-          {!historyLoading && !historyData?.history?.length && (
-            <div style={{ color: "var(--grey)" }}>
-              No matches recorded yet.
-            </div>
-          )}
-          {historyData?.history?.map((row) => {
-            const stake = toBigInt((row.payouts as any)?.stake);
-            const bets = toBigInt((row.payouts as any)?.bets);
-            const playerCut = toBigInt((row.payouts as any)?.playerCut);
-            const total = toBigInt((row.payouts as any)?.total);
-            const stakeAmount = toBigInt(row.stakeAmount);
-            const platformRake = toBigInt((row.payouts as any)?.platformRake);
-            const unredeemed = toBigInt(row.unredeemed);
-            const date = new Date(row.date).toLocaleString();
-            return (
-              <div
-                key={row.matchId}
-                style={{
-                  padding: "14px 16px",
-                  borderRadius: 10,
-                  background: "rgba(0,0,0,0.4)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  marginBottom: 10,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 8,
-                    gap: 8,
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>
-                      Match {row.matchId}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--grey)" }}>
-                      {row.mode.toUpperCase()} • {date}
-                    </div>
-                  </div>
-                  <button
-                    className="sk-sub-btn"
-                    onClick={() => void redeemMatch(row.matchId)}
-                    disabled={
-                      redeemingMatchId === row.matchId || unredeemed <= 0n
-                    }
-                  >
-                    {redeemingMatchId === row.matchId
-                      ? "REDEEMING..."
-                      : unredeemed > 0n
-                        ? "REDEEM"
-                        : "REDEEMED"}
-                  </button>
-                </div>
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                    gap: 8,
-                    fontSize: 12,
-                  }}
-                >
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Stake</div>
-                    <div>{formatToken(stake, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Stake Amount</div>
-                    <div>{formatToken(stakeAmount, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Bet Wins</div>
-                    <div>{formatToken(bets, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Player Cut</div>
-                    <div>{formatToken(playerCut, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Total</div>
-                    <div>{formatToken(total, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Platform Rake</div>
-                    <div>{formatToken(platformRake, assetDecimals)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: "var(--grey)" }}>Unredeemed</div>
-                    <div>{formatToken(unredeemed, assetDecimals)}</div>
-                  </div>
-                </div>
-
-                {row.participants?.length ? (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      fontSize: 11,
-                      color: "var(--grey)",
-                    }}
-                  >
-                    Participants:{" "}
-                    {row.participants
-                      .map((p: string) => shortenAddress(p))
-                      .join(", ")}
-                  </div>
-                ) : null}
+        {activeTab === "history" && (
+          <div className="pro-history">
+            {historyLoading && (
+              <div className="pro-loading">
+                <span className="pro-spinner" /> Loading history…
               </div>
-            );
-          })}
-        </div>
+            )}
+            {historyError && <div className="pro-error">{historyError}</div>}
+            {!historyLoading && !historyData?.history?.length && (
+              <div className="pro-empty-state">
+                <div style={{ fontSize: 32 }}>📋</div>
+                <div>No matches recorded yet.</div>
+              </div>
+            )}
+
+            {historyData?.history?.map((row, idx) => {
+              const stake = toBigInt((row.payouts as any)?.stake);
+              const bets = toBigInt((row.payouts as any)?.bets);
+              const total = toBigInt((row.payouts as any)?.total);
+              const stakeAmount = toBigInt(row.stakeAmount);
+              const unredeemed = toBigInt(row.unredeemed);
+              const platformRake = toBigInt((row.payouts as any)?.platformRake);
+              const date = new Date(row.date).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+
+              const isWin = total > 0n;
+              const isStaked = row.mode === "staked";
+              const pnl = total - stakeAmount;
+
+              return (
+                <div
+                  key={row.matchId}
+                  className={`pro-match-card${isWin ? " pro-match-card--win" : ""}`}
+                  style={{ animationDelay: `${idx * 40}ms` }}
+                >
+                  {/* Match header */}
+                  <div className="pro-match-header">
+                    <div className="pro-match-left">
+                      <span className={`pro-match-mode-badge${isStaked ? " staked" : ""}`}>
+                        {isStaked ? "🔒 STAKED" : "🎮 FREE"}
+                      </span>
+                      <span className="pro-match-id">#{row.matchId.slice(-6).toUpperCase()}</span>
+                      <span className="pro-match-date">{date}</span>
+                    </div>
+                    <div className="pro-match-right">
+                      {unredeemed > 0n ? (
+                        <button
+                          className="pro-match-redeem-btn"
+                          onClick={() => void redeemMatch(row.matchId)}
+                          disabled={redeemingMatchId === row.matchId}
+                        >
+                          {redeemingMatchId === row.matchId ? "…" : `⬇ REDEEM ${formatToken(unredeemed, assetDecimals)}`}
+                        </button>
+                      ) : (
+                        <span className="pro-match-redeemed">✓ CLAIMED</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Payout breakdown (Polymarket-style) */}
+                  <div className="pro-match-markets">
+                    {isStaked && (
+                      <div className="pro-market-row">
+                        <span className="pro-market-label">Match stake</span>
+                        <span className="pro-market-value">
+                          {formatToken(stakeAmount, assetDecimals)} {assetSymbol}
+                        </span>
+                      </div>
+                    )}
+                    {stake > 0n && (
+                      <div className="pro-market-row pro-market-row--positive">
+                        <span className="pro-market-label">🏆 Stake winnings</span>
+                        <span className="pro-market-value pro-market-value--green">
+                          +{formatToken(stake, assetDecimals)}
+                        </span>
+                      </div>
+                    )}
+                    {bets > 0n && (
+                      <div className="pro-market-row pro-market-row--positive">
+                        <span className="pro-market-label">📊 Bet winnings</span>
+                        <span className="pro-market-value pro-market-value--green">
+                          +{formatToken(bets, assetDecimals)}
+                        </span>
+                      </div>
+                    )}
+                    {platformRake > 0n && (
+                      <div className="pro-market-row">
+                        <span className="pro-market-label">Platform rake (4%)</span>
+                        <span className="pro-market-value pro-market-value--grey">
+                          -{formatToken(platformRake, assetDecimals)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* P&L summary */}
+                  {isStaked && (
+                    <div className={`pro-match-pnl${pnl > 0n ? " positive" : pnl < 0n ? " negative" : ""}`}>
+                      <span>NET P&L</span>
+                      <span>
+                        {pnl > 0n ? "+" : ""}
+                        {formatToken(pnl >= 0n ? pnl : -pnl, assetDecimals)} {assetSymbol}
+                        {pnl < 0n ? " lost" : pnl === 0n ? "" : " profit"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
