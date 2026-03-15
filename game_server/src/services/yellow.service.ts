@@ -15,13 +15,16 @@ import {
   getRequestId,
   StateIntent,
   AuthRequestParams,
+  type RPCAppSessionAllocation,
   NitroliteClient,
   WalletStateSigner,
+  CustodyAbi,
 } from "@erc7824/nitrolite";
 import { Decimal } from "decimal.js";
 import { env } from "../config/env.js";
 import {
   type Address,
+  type Chain,
   http,
   createWalletClient,
   createPublicClient,
@@ -32,7 +35,6 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
-import { custodyAbi } from "@erc7824/nitrolite/dist/abis/generated";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -50,6 +52,12 @@ const CHAIN_ID = env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : sepolia.id;
 const RPC_URL = env.YELLOW_RPC_URL;
 const AUTO_FUND = env.YELLOW_AUTOFUND;
 const AUTO_FUND_AMOUNT = new Decimal(env.YELLOW_AUTOFUND_AMOUNT || "0");
+const custodyAbi = CustodyAbi;
+
+const getChain = (): Chain =>
+  CHAIN_ID === sepolia.id
+    ? sepolia
+    : ({ ...sepolia, id: CHAIN_ID } as Chain);
 
 // ---------------------------------------------------------------------------
 // WebSocket RPC client
@@ -310,9 +318,7 @@ async function getNitroClient(): Promise<NitroliteClient> {
   if (nitroClient) return nitroClient;
 
   const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
-  const chain = (
-    CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID }
-  ) as typeof sepolia;
+  const chain = getChain();
 
   const publicClient = getPublicClient(chain);
   await ensurePlatformEOA(publicClient, account.address as Address);
@@ -339,7 +345,7 @@ async function getNitroClient(): Promise<NitroliteClient> {
   return nitroClient;
 }
 
-function getPublicClient(chain = sepolia) {
+function getPublicClient(chain: Chain = sepolia) {
   if (viemPublicClient) return viemPublicClient;
   viemPublicClient = createPublicClient({
     transport: http(RPC_URL!),
@@ -440,9 +446,7 @@ async function ensureAuthenticated(): Promise<void> {
     createWalletClient({
       account,
       transport: http(RPC_URL!),
-      chain: (CHAIN_ID === sepolia.id
-        ? sepolia
-        : { ...sepolia, id: CHAIN_ID }) as any,
+      chain: getChain(),
     }) as any,
     authParams as any,
     { name: appCredential },
@@ -639,21 +643,21 @@ export async function getWalletL1Balance(
 ): Promise<string> {
   try {
     const normalizedAsset = getAddress(assetAddress as Address);
-    const client = getPublicClient(
-      CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID },
-    );
+    const client = getPublicClient(getChain());
     const [rawBalance, decimals] = await Promise.all([
       client.readContract({
         address: normalizedAsset,
         abi: erc20Abi,
         functionName: "balanceOf",
         args: [walletAddress as Address],
+        authorizationList: [],
       }),
       client.readContract({
         address: normalizedAsset,
         abi: erc20Abi,
         functionName: "decimals",
         args: [],
+        authorizationList: [],
       }),
     ]);
     const balance = new Decimal(rawBalance.toString()).div(
@@ -673,14 +677,13 @@ export async function getWalletCustodyBalance(
 ): Promise<string> {
   try {
     const normalizedAsset = getAddress(assetAddress as Address);
-    const client = getPublicClient(
-      CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID },
-    );
+    const client = getPublicClient(getChain());
     const balances = await client.readContract({
       address: CUSTODY_ADDRESS as Address,
       abi: custodyAbi as any,
       functionName: "getAccountsBalances",
       args: [[walletAddress as Address], [normalizedAsset]],
+      authorizationList: [],
     });
     const raw =
       Array.isArray(balances) && Array.isArray(balances[0])
@@ -830,9 +833,7 @@ export async function payoutWinner(
   ensureEnabled();
   if (amountWei <= 0n) return { txHash: "" };
 
-  const chain = (
-    CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID }
-  ) as any;
+  const chain = getChain();
   const publicClient = getPublicClient(chain);
   const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
   const walletClient = createWalletClient({
@@ -886,8 +887,7 @@ export async function verifyStakeDeposit(
   stakeAmountWei: bigint,
 ): Promise<{ valid: boolean; error?: string }> {
   try {
-    const chain =
-      CHAIN_ID === sepolia.id ? sepolia : { ...sepolia, id: CHAIN_ID };
+    const chain = getChain();
     const publicClient = getPublicClient(chain);
 
     const [tx, receipt] = await Promise.all([

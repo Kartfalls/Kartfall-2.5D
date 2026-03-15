@@ -393,7 +393,7 @@ export class Preloader extends Phaser.Scene {
     if (this.textures.exists(TEX_PICKUP_CRATE)) return;
 
     const size = 32;
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
+    const g = this.make.graphics({ x: 0, y: 0 });
 
     // Base wood
     g.fillStyle(0x5d3b23, 1);

@@ -2,7 +2,7 @@
 **/node_modules/
 
 # Build outputs
-game_client/dist/
+**/game_client/dist/
 game_server/build/
 **/coverage/
 **/.vite/

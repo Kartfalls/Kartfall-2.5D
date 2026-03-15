@@ -21,6 +21,17 @@ type LedgerBalance = {
   amount: string;
 };
 
+type HexAddress = `0x${string}`;
+type AuthRequestParams = Parameters<typeof createAuthRequestMessage>[0];
+
+function toHexAddress(value: string, label: string): HexAddress {
+  const normalized = value?.trim();
+  if (!normalized || !normalized.startsWith("0x")) {
+    throw new Error(`Invalid ${label}: expected 0x-prefixed address`);
+  }
+  return normalized as HexAddress;
+}
+
 function getClearnodeUrl() {
   return (
     import.meta.env.VITE_YELLOW_URL || "wss://clearnet-sandbox.yellow.com/ws"
@@ -90,13 +101,10 @@ async function sendRPC(
 
 async function createEip712Signer(
   wallet: WalletLike,
-  authParams: {
-    address: string;
-    session_key: string;
-    scope: string;
-    expires_at: bigint;
-    allowances: Array<{ asset: string; amount: string }>;
-  },
+  authParams: Pick<
+    AuthRequestParams,
+    "address" | "session_key" | "scope" | "expires_at" | "allowances"
+  >,
 ) {
   const provider = await wallet.getEthereumProvider();
   const web3Provider = new ethers.BrowserProvider(provider as any);
@@ -133,15 +141,17 @@ async function fetchLedgerBalances(
 ): Promise<LedgerBalance[]> {
   const socket = await openSocket(getClearnodeUrl());
   try {
+    const walletAddressHex = toHexAddress(walletAddress, "wallet address");
     const sessionWallet = ethers.Wallet.createRandom();
+    const sessionKeyHex = toHexAddress(sessionWallet.address, "session key");
     const sessionSigner = createECDSAMessageSigner(
       sessionWallet.privateKey as `0x${string}`,
     );
 
     const expiresAtSec = BigInt(Math.floor(Date.now() / 1000) + 24 * 60 * 60);
-    const authParams = {
-      address: walletAddress,
-      session_key: sessionWallet.address,
+    const authParams: AuthRequestParams = {
+      address: walletAddressHex,
+      session_key: sessionKeyHex,
       application: getAppId(),
       allowances: [],
       expires_at: expiresAtSec,
@@ -170,8 +180,8 @@ async function fetchLedgerBalances(
     }
 
     const eip712Signer = await createEip712Signer(wallet, {
-      address: walletAddress,
-      session_key: sessionWallet.address,
+      address: walletAddressHex,
+      session_key: sessionKeyHex,
       scope: authParams.scope,
       expires_at: authParams.expires_at,
       allowances: authParams.allowances,
@@ -198,7 +208,7 @@ async function fetchLedgerBalances(
 
     const balanceReq = await createGetLedgerBalancesMessage(
       sessionSigner,
-      walletAddress,
+      walletAddressHex,
       generateRequestId(),
       Date.now(),
     );

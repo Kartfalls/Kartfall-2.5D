@@ -1,5 +1,4 @@
 import { ethers } from "ethers";
-import { custodyAbi } from "@erc7824/nitrolite/dist/abis/generated";
 import {
   createAuthRequestMessage,
   createAuthVerifyMessageFromChallenge,
@@ -11,6 +10,8 @@ import {
   generateRequestId,
   RPCMethod,
   EIP712AuthTypes,
+  type AuthRequestParams,
+  CustodyAbi,
 } from "@erc7824/nitrolite";
 import { getPackedState } from "@erc7824/nitrolite/dist/utils/state";
 import { getChannelId } from "@erc7824/nitrolite/dist/utils/channel";
@@ -33,6 +34,8 @@ type LedgerChannelOperation = {
   participants?: string[];
 };
 import type { YellowStatus } from "./useYellowStatus";
+
+const custodyAbi = CustodyAbi;
 
 export const ERC20_ABI = [
   {
@@ -76,7 +79,13 @@ export type WalletLike = {
   address?: string;
 };
 
-function assertStatus(status?: YellowStatus | null) {
+function assertStatus(
+  status?: YellowStatus | null,
+): asserts status is YellowStatus & {
+  assetAddress: string;
+  custodyAddress: string;
+  chainId: number;
+} {
   if (!status?.assetAddress || !status?.custodyAddress || !status?.chainId) {
     throw new Error("Yellow config missing; refresh status.");
   }
@@ -200,7 +209,7 @@ async function createEip712Signer(
 
 async function withAuthSession<T>(
   wallet: WalletLike,
-  walletAddress: string,
+  walletAddress: `0x${string}`,
   fn: (socket: WebSocket, sessionSigner: (payload: any) => Promise<string>) => Promise<T>,
 ) {
   const socket = await openSocket(getClearnodeUrl());
@@ -210,11 +219,11 @@ async function withAuthSession<T>(
       sessionWallet.privateKey as `0x${string}`,
     );
     const expiresAtSec = BigInt(Math.floor(Date.now() / 1000) + 24 * 60 * 60);
-    const authParams = {
+    const authParams: AuthRequestParams = {
       address: walletAddress,
-      session_key: sessionWallet.address,
+      session_key: sessionWallet.address as `0x${string}`,
       application: getAppId(),
-      allowances: [],
+      allowances: [] as AuthRequestParams["allowances"],
       expires_at: expiresAtSec,
       scope: "*",
     };
@@ -242,7 +251,7 @@ async function withAuthSession<T>(
 
     const eip712Signer = await createEip712Signer(wallet, {
       address: walletAddress,
-      session_key: sessionWallet.address,
+      session_key: sessionWallet.address as `0x${string}`,
       scope: authParams.scope,
       expires_at: authParams.expires_at,
       allowances: authParams.allowances,
@@ -487,14 +496,17 @@ export async function settleUnifiedToL1(
   const decimals = await token.decimals();
   const amountWei = ethers.parseUnits(amount.toString(), decimals);
 
-  await withAuthSession(wallet, walletAddress, async (socket, sessionSigner) => {
+  await withAuthSession(wallet, walletAddress as `0x${string}`, async (socket, sessionSigner) => {
     let channelOp: LedgerChannelOperation | null = null;
+
+    const chainId = status.chainId;
+    const assetAddress = status.assetAddress as `0x${string}`;
 
     const createReq = await createCreateChannelMessage(
       sessionSigner as any,
       {
-        chain_id: status.chainId,
-        token: status.assetAddress,
+        chain_id: chainId,
+        token: assetAddress,
       },
       generateRequestId(),
       Date.now(),
@@ -638,7 +650,7 @@ export async function settleUnifiedToL1(
     const closeReq = await createCloseChannelMessage(
       sessionSigner as any,
       channelId as any,
-      walletAddress,
+      walletAddress as `0x${string}`,
       generateRequestId(),
       Date.now(),
     );

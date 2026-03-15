@@ -9,10 +9,11 @@
     "node": ">= 20.9.0"
   },
   "scripts": {
-    "start": "tsx watch src/index.ts",
+    "start": "node build/index.js",
+    "dev": "tsx watch src/index.ts",
     "loadtest": "tsx loadtest/example.ts --room kartfall_room --numClients 2",
     "yellow:bootstrap": "tsx src/scripts/bootstrap-yellow.ts",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && node --max-old-space-size=2048 ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
     "clean": "rimraf build",
     "test": "mocha -r tsx test/**.test.ts --exit --timeout 15000"
   },
