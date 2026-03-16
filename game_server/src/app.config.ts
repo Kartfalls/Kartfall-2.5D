@@ -42,7 +42,7 @@ import {
   getHistoryForWallet,
   getMatchChannel,
   getMatchChannelsByIds,
-  markChannelClosed,
+  upsertChannelBalances,
 } from "./services/matchChannel.service.js";
 import { env } from "./config/env.js";
 
@@ -460,16 +460,29 @@ const server = defineServer({
 
           const withdrawAmount = await getChannelBalance(channelId, walletAddress);
 
-          if (channel.status !== "closed" && env.YELLOW_ENABLED && withdrawAmount > 0n) {
-            // Platform withdraws from its custody and transfers directly to winner.
-            // The channel stays open for future matches.
-            console.log(`[API] withdraw: paying out ${withdrawAmount.toString()} to ${walletAddress}`);
-            await payoutWinner(walletAddress, withdrawAmount);
-            await markChannelClosed(matchId);
-          }
+          if (env.YELLOW_ENABLED && withdrawAmount > 0n) {
+            // Clear THIS player's balance FIRST — acts as the idempotency guard.
+            // If a concurrent request races in, it will see 0 and skip the payout.
+            await clearPlayerChannelBalance(channelId, walletAddress);
 
-          // Only clear THIS player's balance — other players can still redeem.
-          await clearPlayerChannelBalance(channelId, walletAddress);
+            console.log(`[API] withdraw: paying out ${withdrawAmount.toString()} to ${walletAddress}`);
+            try {
+              await payoutWinner(walletAddress, withdrawAmount);
+            } catch (payErr) {
+              // Payout failed on-chain — restore the balance so the player can retry.
+              console.error(`[API] withdraw: payoutWinner failed for ${walletAddress}, restoring balance`, payErr);
+              await upsertChannelBalances([{
+                channelId,
+                wallet: walletAddress,
+                unredeemedAmount: withdrawAmount,
+                lastUpdated: Date.now(),
+              }]);
+              throw payErr;
+            }
+          } else if (!env.YELLOW_ENABLED) {
+            // Yellow disabled (dev mode) — just clear the record.
+            await clearPlayerChannelBalance(channelId, walletAddress);
+          }
 
           res.json({
             ok: true,
