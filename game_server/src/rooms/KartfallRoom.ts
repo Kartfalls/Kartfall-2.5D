@@ -12,6 +12,7 @@ import {
 import {
   createMatchChannel,
   submitMatchPayouts,
+  type NetworkMode,
 } from "../services/yellow.service.js";
 import {
   addChannelParticipant,
@@ -55,6 +56,7 @@ export class KartfallRoom extends Room {
   private betManager!: BetManager;
 
   private nextColorIndex = 0;
+  private networkMode: NetworkMode = "testnet";
 
   // ── Kill streak tracking (in-memory, not synced to schema) ──
   private streakBySession = new Map<string, number>();
@@ -71,6 +73,7 @@ export class KartfallRoom extends Room {
     state.roomCode = generateRoomCode();
     state.gameMode = options?.gameMode === "staked" ? "staked" : "free";
     state.matchId = `${this.roomId}_${Date.now()}`;
+    this.networkMode = options?.network === "mainnet" ? "mainnet" : "testnet";
 
     if (options?.maxPlayers) state.maxPlayers = options.maxPlayers;
     if (options?.maxSpectators) state.maxSpectators = options.maxSpectators;
@@ -150,7 +153,7 @@ export class KartfallRoom extends Room {
           participants,
           stakeAmount,
           mode: this.state.gameMode,
-        });
+        }, this.networkMode);
         this.state.channelId = result.channelId;
 
         await createMatchChannelRecord({
@@ -183,7 +186,7 @@ export class KartfallRoom extends Room {
     this.registerMessages();
 
     console.log(
-      `[KartfallRoom] Created room ${state.roomCode} (${this.roomId})`,
+      `[KartfallRoom] Created room ${state.roomCode} (${this.roomId}) | mode=${state.gameMode} | network=${this.networkMode.toUpperCase()}`,
     );
   }
 
@@ -518,6 +521,8 @@ export class KartfallRoom extends Room {
         const txHash =
           typeof message?.txHash === "string" ? message.txHash : "";
 
+        console.log(`[KartfallRoom] Stake ready from ${player.walletAddress} | network=${this.networkMode.toUpperCase()} | txHash=${txHash || "(none)"}`);
+
         try {
           const result = await this.stakeManager.verifyAndReserveDeposit(
             player.walletAddress,
@@ -753,6 +758,7 @@ export class KartfallRoom extends Room {
         const { version } = await submitMatchPayouts(
           this.state.channelId,
           allocations,
+          this.networkMode,
         );
         await updateChannelVersion(this.state.matchId, version);
         await markChannelSettled(this.state.matchId);

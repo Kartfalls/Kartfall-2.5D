@@ -39,6 +39,7 @@ export default function App() {
     stakeAmount?: number;
     matchDuration?: number;
     walletAddress?: string;
+    network?: string;
   } | null>(null);
 
   // Fetch a fresh Privy access token whenever the user is authenticated
@@ -162,6 +163,7 @@ export default function App() {
         stakeAmount,
         matchDuration,
         walletAddress: activeWalletAddress ?? undefined,
+        network: networkMode,
       });
     },
     [updateName, activeWalletAddress],
@@ -255,6 +257,8 @@ export default function App() {
               ) ?? null
             }
             token={token}
+            httpBase={networkConfig.httpUrl}
+            networkMode={networkMode}
           />
         )}
 
@@ -314,21 +318,20 @@ interface PlayerInfo {
   colorIndex: number;
 }
 
-function getHttpEndpoint() {
-  const wsUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
-  return wsUrl.replace(/^ws(s?):/, "http$1:");
-}
-
 function LobbyOverlay({
   room,
   onLeave,
   activeWallet,
   token,
+  httpBase,
+  networkMode,
 }: {
   room: Room;
   onLeave: () => void;
   activeWallet?: WalletLike | null;
   token?: string | null;
+  httpBase?: string;
+  networkMode?: string;
 }) {
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [roomCode, setRoomCode] = useState("");
@@ -403,9 +406,11 @@ function LobbyOverlay({
       setStakeError(null);
       try {
         const walletAddr = activeWallet.address ?? "";
-        const base = getHttpEndpoint();
+        const base = httpBase ?? (import.meta.env.VITE_SERVER_URL || "http://localhost:2567").replace(/^ws(s?):/, "http$1:");
+        const statusParams = new URLSearchParams({ network: networkMode ?? "testnet" });
+        if (walletAddr) statusParams.set("walletAddress", walletAddr);
         const resp = await fetch(
-          `${base}/api/yellow/status${walletAddr ? `?walletAddress=${encodeURIComponent(walletAddr)}` : ""}`,
+          `${base}/api/yellow/status?${statusParams}`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (!resp.ok) throw new Error("Could not fetch staking configuration");
@@ -421,6 +426,7 @@ function LobbyOverlay({
         }
 
         const stakeAmountUsdc = stakeAmountMicro / 1_000_000;
+        console.log(`[Kartfall] Stake deposit prompt — network: ${yellowStatus.chainId === 1 ? "mainnet" : `testnet (chainId ${yellowStatus.chainId})`}, asset: ${yellowStatus.asset}, amount: ${stakeAmountUsdc} USDC, custody: ${yellowStatus.custodyAddress}`);
         const { txHash } = await depositStake(
           activeWallet,
           yellowStatus,

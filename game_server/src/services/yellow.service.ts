@@ -40,19 +40,56 @@ import { sepolia, mainnet, polygon, arbitrum, optimism, base } from "viem/chains
 // Config
 // ---------------------------------------------------------------------------
 
-const CLEARNODE_URL = env.YELLOW_CLEARNODE_URL;
 const PLATFORM_PRIVATE_KEY = env.YELLOW_PRIVATE_KEY;
 export const DEFAULT_ASSET = env.YELLOW_ASSET;
 export const ASSET_DECIMALS = env.YELLOW_ASSET_DECIMALS;
 const YELLOW_ENABLED = env.YELLOW_ENABLED;
+// Force autofund off on mainnet regardless of YELLOW_AUTOFUND env var
+const AUTO_FUND = env.YELLOW_AUTOFUND && !env.YELLOW_MAINNET;
+const AUTO_FUND_AMOUNT = new Decimal(env.YELLOW_AUTOFUND_AMOUNT || "0");
+
+// Per-network config — testnet uses existing env vars, mainnet uses _MAINNET variants
+export type NetworkMode = "testnet" | "mainnet";
+interface YellowNetworkConstants {
+  CLEARNODE_URL: string;
+  ASSET: string;
+  ASSET_DECIMALS: number;
+  ASSET_ADDRESS: string;
+  CUSTODY_ADDRESS: string;
+  ADJUDICATOR_ADDRESS: string;
+  CHAIN_ID: number;
+  RPC_URL: string;
+}
+const NETWORK_CONSTANTS: Record<NetworkMode, YellowNetworkConstants> = {
+  testnet: {
+    CLEARNODE_URL: env.YELLOW_CLEARNODE_URL,
+    ASSET: env.YELLOW_ASSET,
+    ASSET_DECIMALS: env.YELLOW_ASSET_DECIMALS,
+    ASSET_ADDRESS: env.YELLOW_ASSET_ADDRESS,
+    CUSTODY_ADDRESS: env.YELLOW_CUSTODY_ADDRESS,
+    ADJUDICATOR_ADDRESS: env.YELLOW_ADJUDICATOR_ADDRESS,
+    CHAIN_ID: env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : sepolia.id,
+    RPC_URL: env.YELLOW_RPC_URL,
+  },
+  mainnet: {
+    CLEARNODE_URL: env.YELLOW_CLEARNODE_URL_MAINNET,
+    ASSET: env.YELLOW_ASSET_MAINNET,
+    ASSET_DECIMALS: env.YELLOW_ASSET_DECIMALS_MAINNET,
+    ASSET_ADDRESS: env.YELLOW_ASSET_ADDRESS_MAINNET,
+    CUSTODY_ADDRESS: env.YELLOW_CUSTODY_ADDRESS_MAINNET,
+    ADJUDICATOR_ADDRESS: env.YELLOW_ADJUDICATOR_ADDRESS_MAINNET,
+    CHAIN_ID: env.YELLOW_CHAIN_ID_MAINNET ? Number(env.YELLOW_CHAIN_ID_MAINNET) : 1,
+    RPC_URL: env.YELLOW_RPC_URL_MAINNET,
+  },
+};
+
+// Backward-compat aliases (used by non-network-aware helpers like getPlayerAssetBalance)
+const CLEARNODE_URL = env.YELLOW_CLEARNODE_URL;
 const ASSET_ADDRESS = env.YELLOW_ASSET_ADDRESS;
 const CUSTODY_ADDRESS = env.YELLOW_CUSTODY_ADDRESS;
 const ADJUDICATOR_ADDRESS = env.YELLOW_ADJUDICATOR_ADDRESS;
 const CHAIN_ID = env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : sepolia.id;
 const RPC_URL = env.YELLOW_RPC_URL;
-// Force autofund off on mainnet regardless of YELLOW_AUTOFUND env var
-const AUTO_FUND = env.YELLOW_AUTOFUND && !env.YELLOW_MAINNET;
-const AUTO_FUND_AMOUNT = new Decimal(env.YELLOW_AUTOFUND_AMOUNT || "0");
 const custodyAbi = CustodyAbi;
 
 /** Map known chain IDs to their viem Chain objects. Unknown IDs fall back to a
@@ -78,8 +115,27 @@ type Pending = {
   reject: (e: any) => void;
 };
 
+// Per-network client state
+interface NetworkClientState {
+  ws: WebSocket | null;
+  pending: Map<number, Pending>;
+  nitroClient: NitroliteClient | null;
+  viemPublicClient: ReturnType<typeof createPublicClient> | null;
+  authReady: boolean;
+  sessionSigner: ReturnType<typeof createECDSAMessageSigner> | null;
+  sessionKey: `0x${string}` | null;
+}
+function makeNetworkState(): NetworkClientState {
+  return { ws: null, pending: new Map(), nitroClient: null, viemPublicClient: null, authReady: false, sessionSigner: null, sessionKey: null };
+}
+const networkStates: Record<NetworkMode, NetworkClientState> = {
+  testnet: makeNetworkState(),
+  mainnet: makeNetworkState(),
+};
+// Backward-compat aliases pointing at testnet state (used by non-network-aware helpers)
+const pending = networkStates.testnet.pending;
+// Legacy single-instance references — kept so non-refactored helpers still compile
 let ws: WebSocket | null = null;
-const pending = new Map<number, Pending>();
 let nitroClient: NitroliteClient | null = null;
 let viemPublicClient: ReturnType<typeof createPublicClient> | null = null;
 let authReady = false;
@@ -116,7 +172,7 @@ async function ensurePlatformEOA(
  * Ask the clearnode to prepare a channel and co-sign the initial state.
  * Returns params that can be fed directly into NitroliteClient.createChannel().
  */
-async function requestServerPreparedChannelParams(): Promise<{
+async function requestServerPreparedChannelParams(network: NetworkMode = "testnet"): Promise<{
   channel: Parameters<NitroliteClient["createChannel"]>[0]["channel"];
   unsignedInitialState: Parameters<
     NitroliteClient["createChannel"]
@@ -124,24 +180,23 @@ async function requestServerPreparedChannelParams(): Promise<{
   serverSignature: Hex;
 }> {
   ensureEnabled();
-  await ensureAuthenticated();
-  const signer = createECDSAMessageSigner(
-    PLATFORM_PRIVATE_KEY as `0x${string}`,
-  );
-
-  const signerToUse = sessionSigner ?? signer;
+  await ensureAuthenticated(network);
+  const cfg = NETWORK_CONSTANTS[network];
+  const state = networkStates[network];
+  const signer = createECDSAMessageSigner(PLATFORM_PRIVATE_KEY as `0x${string}`);
+  const signerToUse = state.sessionSigner ?? signer;
 
   const rpc = await createCreateChannelMessage(
     signerToUse,
     {
-      chain_id: CHAIN_ID,
-      token: ASSET_ADDRESS as Address,
+      chain_id: cfg.CHAIN_ID,
+      token: cfg.ASSET_ADDRESS as Address,
     },
     generateRequestId(),
     Date.now(),
   );
 
-  const res = await sendRPC(rpc);
+  const res = await sendRPC(rpc, network);
   if (!res || res.method !== RPCMethod.CreateChannel) {
     console.error(
       "[Yellow] Unexpected clearnode response to create_channel",
@@ -235,21 +290,24 @@ async function fetchSupportedAssets(): Promise<any[]> {
   return (res as any)?.params?.assets ?? [];
 }
 
-async function ensureSocket(): Promise<WebSocket> {
+async function ensureSocket(network: NetworkMode = "testnet"): Promise<WebSocket> {
   ensureEnabled();
-  if (ws && ws.readyState === ws.OPEN) return ws;
+  const state = networkStates[network];
+  const clearnodeUrl = NETWORK_CONSTANTS[network].CLEARNODE_URL;
+  if (state.ws && state.ws.readyState === state.ws.OPEN) return state.ws;
 
   return await new Promise((resolve, reject) => {
-    const socket = new WebSocket(CLEARNODE_URL);
+    const socket = new WebSocket(clearnodeUrl);
     socket.onopen = () => {
-      ws = socket;
+      state.ws = socket;
+      if (network === "testnet") ws = socket; // keep legacy alias in sync
       resolve(socket);
     };
     socket.onerror = (err) => {
-      // Reject connect promise and flush any pending requests.
-      pending.forEach((p) => p.reject(err));
-      pending.clear();
-      authReady = false;
+      state.pending.forEach((p) => p.reject(err));
+      state.pending.clear();
+      state.authReady = false;
+      if (network === "testnet") { authReady = false; ws = null; }
       reject(err);
     };
     socket.onmessage = (event) => {
@@ -258,9 +316,9 @@ async function ensureSocket(): Promise<WebSocket> {
         const res = parseAnyRPCResponse(raw);
         const reqId =
           (res as any).requestId ?? getRequestId(res as any) ?? undefined;
-        if (reqId !== undefined && pending.has(reqId)) {
-          pending.get(reqId)!.resolve(res);
-          pending.delete(reqId);
+        if (reqId !== undefined && state.pending.has(reqId)) {
+          state.pending.get(reqId)!.resolve(res);
+          state.pending.delete(reqId);
         }
       } catch (err) {
         console.error("[Yellow] Failed to parse response", {
@@ -270,18 +328,20 @@ async function ensureSocket(): Promise<WebSocket> {
       }
     };
     socket.onclose = () => {
-      pending.forEach((p) =>
+      state.pending.forEach((p) =>
         p.reject(new Error("Yellow clearnode WebSocket closed")),
       );
-      pending.clear();
-      authReady = false;
-      ws = null;
+      state.pending.clear();
+      state.authReady = false;
+      state.ws = null;
+      if (network === "testnet") { authReady = false; ws = null; }
     };
   });
 }
 
-async function sendRPC(message: string): Promise<any> {
-  const socket = await ensureSocket();
+async function sendRPC(message: string, network: NetworkMode = "testnet"): Promise<any> {
+  const socket = await ensureSocket(network);
+  const state = networkStates[network];
   const reqId = (() => {
     try {
       const parsed = JSON.parse(message);
@@ -296,15 +356,15 @@ async function sendRPC(message: string): Promise<any> {
 
   return await new Promise((resolve, reject) => {
     if (reqId !== undefined) {
-      pending.set(reqId, { resolve, reject });
+      state.pending.set(reqId, { resolve, reject });
     }
     socket.send(message);
     if (reqId === undefined) {
       resolve(null);
     }
     setTimeout(() => {
-      if (reqId !== undefined && pending.has(reqId)) {
-        pending.delete(reqId);
+      if (reqId !== undefined && state.pending.has(reqId)) {
+        state.pending.delete(reqId);
         reject(new Error("Nitrolite RPC timeout"));
       }
     }, 10_000);
@@ -323,36 +383,40 @@ function decimalToWei(amount: Decimal): bigint {
   );
 }
 
-async function getNitroClient(): Promise<NitroliteClient> {
+async function getNitroClient(network: NetworkMode = "testnet"): Promise<NitroliteClient> {
   ensureEnabled();
-  if (nitroClient) return nitroClient;
+  const state = networkStates[network];
+  const cfg = NETWORK_CONSTANTS[network];
+  if (state.nitroClient) return state.nitroClient;
 
   const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
-  const chain = getChain();
+  const chain = KNOWN_CHAINS[cfg.CHAIN_ID] ?? ({ ...sepolia, id: cfg.CHAIN_ID } as Chain);
 
-  const publicClient = getPublicClient(chain);
-  await ensurePlatformEOA(publicClient, account.address as Address);
+  const pubClient = createPublicClient({ transport: http(cfg.RPC_URL!), chain });
+  await ensurePlatformEOA(pubClient, account.address as Address);
 
   const walletClient = createWalletClient({
     account,
-    transport: http(RPC_URL!),
+    transport: http(cfg.RPC_URL!),
     chain,
   });
 
-  nitroClient = new NitroliteClient({
-    publicClient: publicClient as any,
+  state.nitroClient = new NitroliteClient({
+    publicClient: pubClient as any,
     walletClient: walletClient as any,
     stateSigner: new WalletStateSigner(walletClient),
     addresses: {
-      custody: CUSTODY_ADDRESS as Address,
-      adjudicator: ADJUDICATOR_ADDRESS as Address,
+      custody: cfg.CUSTODY_ADDRESS as Address,
+      adjudicator: cfg.ADJUDICATOR_ADDRESS as Address,
     },
     chainId: chain.id,
-    // Challenge duration for channels; 1 day default
     challengeDuration: 86_400n,
   });
 
-  return nitroClient;
+  // keep legacy alias in sync for testnet
+  if (network === "testnet") { nitroClient = state.nitroClient; viemPublicClient = pubClient; }
+
+  return state.nitroClient;
 }
 
 function getPublicClient(chain: Chain = sepolia) {
@@ -383,9 +447,9 @@ function toAllocation(
   } as any;
 }
 
-function getRPCSigner() {
+function getRPCSigner(network: NetworkMode = "testnet") {
   return (
-    sessionSigner ??
+    networkStates[network].sessionSigner ??
     createECDSAMessageSigner(PLATFORM_PRIVATE_KEY as `0x${string}`)
   );
 }
@@ -395,21 +459,25 @@ function getRPCSigner() {
 // ---------------------------------------------------------------------------
 
 /** Authenticate once per process with the clearnode. Required for create_channel. */
-async function ensureAuthenticated(): Promise<void> {
-  if (authReady) return;
+async function ensureAuthenticated(network: NetworkMode = "testnet"): Promise<void> {
+  const state = networkStates[network];
+  const cfg = NETWORK_CONSTANTS[network];
+  if (state.authReady) return;
   const account = privateKeyToAccount(PLATFORM_PRIVATE_KEY as `0x${string}`);
   const platform = account.address as Address;
   const appCredential =
     env.YELLOW_API_KEY?.trim() || env.YELLOW_APP_ID?.trim() || "kartfall_v1";
-  const expiresAtSec = BigInt(Math.floor(Date.now() / 1000) + 24 * 60 * 60); // 24h in seconds
+  const expiresAtSec = BigInt(Math.floor(Date.now() / 1000) + 24 * 60 * 60);
 
-  // Create an ephemeral session key (per process) for signed RPCs.
-  if (!sessionKey) {
+  // Create an ephemeral session key (per network) for signed RPCs.
+  if (!state.sessionKey) {
     const { randomBytes } = await import("crypto");
-    sessionKey = `0x${randomBytes(32).toString("hex")}` as `0x${string}`;
-    sessionSigner = createECDSAMessageSigner(sessionKey);
+    state.sessionKey = `0x${randomBytes(32).toString("hex")}` as `0x${string}`;
+    state.sessionSigner = createECDSAMessageSigner(state.sessionKey);
+    // keep legacy aliases in sync for testnet
+    if (network === "testnet") { sessionKey = state.sessionKey; sessionSigner = state.sessionSigner; }
   }
-  const sessionAccount = privateKeyToAccount(sessionKey as `0x${string}`);
+  const sessionAccount = privateKeyToAccount(state.sessionKey as `0x${string}`);
 
   const authParams: AuthRequestParams = {
     address: platform as Address,
@@ -426,12 +494,9 @@ async function ensureAuthenticated(): Promise<void> {
     Date.now(),
   );
 
-  const challenge = await sendRPC(authReq);
+  const challenge = await sendRPC(authReq, network);
   const challengeMethod = challenge?.method;
-  console.log("[Yellow] auth response", {
-    method: challengeMethod,
-    raw: challenge,
-  });
+  console.log(`[Yellow][${network}] auth response`, { method: challengeMethod, raw: challenge });
   if (
     !challenge ||
     (challengeMethod !== RPCMethod.AuthRequest &&
@@ -455,8 +520,8 @@ async function ensureAuthenticated(): Promise<void> {
   const eip712Signer = createEIP712AuthMessageSigner(
     createWalletClient({
       account,
-      transport: http(RPC_URL!),
-      chain: getChain(),
+      transport: http(cfg.RPC_URL!),
+      chain: KNOWN_CHAINS[cfg.CHAIN_ID] ?? ({ ...sepolia, id: cfg.CHAIN_ID } as Chain),
     }) as any,
     authParams as any,
     { name: appCredential },
@@ -472,16 +537,12 @@ async function ensureAuthenticated(): Promise<void> {
         )
       : await createAuthVerifyMessage(
           eip712Signer,
-          {
-            params: {
-              challengeMessage,
-            },
-          } as any,
+          { params: { challengeMessage } } as any,
           generateRequestId(),
           Date.now(),
         );
-  const verified = await sendRPC(verifyMsg);
-  console.log("[Yellow] auth verify response", verified);
+  const verified = await sendRPC(verifyMsg, network);
+  console.log(`[Yellow][${network}] auth verify response`, verified);
   if (
     !verified ||
     verified.method !== RPCMethod.AuthVerify ||
@@ -491,7 +552,8 @@ async function ensureAuthenticated(): Promise<void> {
       `Clearnode auth_verify failed: ${(verified as any)?.params?.error ?? "unknown"}`,
     );
   }
-  authReady = true;
+  state.authReady = true;
+  if (network === "testnet") authReady = true;
 }
 
 export function getPlatformAddress(): Address {
@@ -726,9 +788,11 @@ export interface MatchChannelResult {
 
 export async function createMatchChannel(
   config: MatchChannelConfig,
+  network: NetworkMode = "testnet",
 ): Promise<MatchChannelResult> {
   ensureEnabled();
-  await ensureAuthenticated();
+  await ensureAuthenticated(network);
+  const cfg = NETWORK_CONSTANTS[network];
   const normalized = [...(config.participants || [])]
     .filter(Boolean)
     .map((w) => getAddress(w as Address));
@@ -737,48 +801,45 @@ export async function createMatchChannel(
     new Set(normalized.map((w) => w.toLowerCase())),
   ).map((w) => getAddress(w as Address));
 
+  console.log(`[Yellow][${network}] createMatchChannel chainId=${cfg.CHAIN_ID} asset=${cfg.ASSET}`);
+
   try {
-    const prepared = await requestServerPreparedChannelParams();
-    const client = await getNitroClient();
+    const prepared = await requestServerPreparedChannelParams(network);
+    const client = await getNitroClient(network);
     const result = await client.createChannel(prepared as any);
 
     return {
       channelId: result.channelId,
       participants,
-      chainId: CHAIN_ID,
-      assetAddress: ASSET_ADDRESS as Address,
+      chainId: cfg.CHAIN_ID,
+      assetAddress: cfg.ASSET_ADDRESS as Address,
       version: prepared.unsignedInitialState.version,
     };
   } catch (err: any) {
     const message = String(err?.message ?? err);
-    const existing = message.match(/0x[0-9a-fA-F]{64}/)?.[0] as
-      | Hex
-      | undefined;
+    const existing = message.match(/0x[0-9a-fA-F]{64}/)?.[0] as Hex | undefined;
     if (existing) {
-      console.warn(
-        `[Yellow] Reusing existing channel for match: ${existing}`,
-      );
+      console.warn(`[Yellow][${network}] Reusing existing channel for match: ${existing}`);
       return {
         channelId: existing,
         participants,
-        chainId: CHAIN_ID,
-        assetAddress: ASSET_ADDRESS as Address,
+        chainId: cfg.CHAIN_ID,
+        assetAddress: cfg.ASSET_ADDRESS as Address,
         version: 0n,
       };
     }
     throw err;
   }
-
-  // unreachable
 }
 
 export async function submitMatchPayouts(
   channelId: string,
   allocations: { destination: string; amount: bigint }[],
+  network: NetworkMode = "testnet",
 ): Promise<{ version: bigint }> {
   ensureEnabled();
-  await ensureAuthenticated();
-  const signer = getRPCSigner();
+  await ensureAuthenticated(network);
+  const signer = getRPCSigner(network);
 
   const MAX_RESIZE_RETRIES = 5;
   const RETRY_BASE_MS = 2000;
@@ -800,7 +861,7 @@ export async function submitMatchPayouts(
         generateRequestId(),
         Date.now(),
       );
-      const res = await sendRPC(req);
+      const res = await sendRPC(req, network);
       if (res?.method === RPCMethod.ResizeChannel) {
         const versionRaw = (res as any)?.params?.state?.version;
         if (versionRaw !== undefined) {
@@ -813,7 +874,7 @@ export async function submitMatchPayouts(
       if (errMsg.includes("resize already ongoing") && attempt < MAX_RESIZE_RETRIES) {
         const delay = RETRY_BASE_MS * (attempt + 1);
         console.warn(
-          `[Yellow] Resize already ongoing for ${allocation.destination}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RESIZE_RETRIES})`,
+          `[Yellow][${network}] Resize already ongoing for ${allocation.destination}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RESIZE_RETRIES})`,
         );
         await new Promise<void>((r) => setTimeout(r, delay));
         attempt++;

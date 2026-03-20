@@ -43,51 +43,65 @@ export const env = {
    */
   PRIVY_VERIFICATION_KEY: optional("PRIVY_VERIFICATION_KEY", ""),
 
-  // ── Yellow Network ───────────────────────────────────────────────────────
-  /** WebSocket endpoint of the Yellow clearnode */
+  // ── Yellow Network — Testnet ─────────────────────────────────────────────
+  /** WebSocket endpoint of the Yellow clearnode (testnet/sandbox) */
   YELLOW_CLEARNODE_URL: optional(
     "YELLOW_CLEARNODE_URL",
-    "wss://clearnet.yellow.com/ws",
+    "wss://clearnet-sandbox.yellow.com/ws",
   ),
   /** Toggle Yellow integration on/off */
   YELLOW_ENABLED: optional("YELLOW_ENABLED", "true") === "true",
 
   /**
-   * Set to "true" to run on mainnet.
-   * When false (default): faucet endpoint is active, autofund is allowed.
-   * When true: faucet returns 403, autofund is force-disabled regardless of YELLOW_AUTOFUND.
-   */
-  YELLOW_MAINNET: optional("YELLOW_MAINNET", "false") === "true",
-
-  /**
    * Platform's hex-encoded private key (0x-prefixed) for signing.
-   * Optional at startup — validated lazily inside getYellowClient().
+   * Shared between testnet and mainnet.
    */
   YELLOW_PRIVATE_KEY: optional("YELLOW_PRIVATE_KEY", "") as `0x${string}` | "",
 
-  /** Token symbol used for payouts (e.g. "usdc") */
-  YELLOW_ASSET: optional("YELLOW_ASSET", "usdc"),
-  /** ERC20 token address of the payout asset (e.g. Sepolia USDC) */
+  /** Token symbol used for payouts on testnet (e.g. "ytest.usd") */
+  YELLOW_ASSET: optional("YELLOW_ASSET", "ytest.usd"),
+  /** ERC20 token address of the payout asset on testnet (e.g. Sepolia USDC) */
   YELLOW_ASSET_ADDRESS: optional("YELLOW_ASSET_ADDRESS", ""),
-
   /** Decimal places of the payout asset (USDC = 6) */
   YELLOW_ASSET_DECIMALS: Number(optional("YELLOW_ASSET_DECIMALS", "6")),
-
-  /** Chain ID for on-chain operations (e.g. 80002 = Polygon Amoy) */
+  /** Chain ID for testnet on-chain operations (e.g. 11155111 = Sepolia) */
   YELLOW_CHAIN_ID: process.env.YELLOW_CHAIN_ID
     ? BigInt(process.env.YELLOW_CHAIN_ID)
     : undefined,
-
-  /** JSON-RPC URL for the target chain (e.g. Alchemy / Infura) */
+  /** JSON-RPC URL for the testnet chain */
   YELLOW_RPC_URL: optional("YELLOW_RPC_URL", ""),
-
-  /** Custody contract address (Nitrolite) */
+  /** Custody contract address on testnet (Nitrolite) */
   YELLOW_CUSTODY_ADDRESS: optional("YELLOW_CUSTODY_ADDRESS", ""),
-
-  /** Adjudicator contract address (Nitrolite) */
+  /** Adjudicator contract address on testnet (Nitrolite) */
   YELLOW_ADJUDICATOR_ADDRESS: optional("YELLOW_ADJUDICATOR_ADDRESS", ""),
 
-  /** Auto-approve + deposit platform funds on demand (development convenience) */
+  // ── Yellow Network — Mainnet ─────────────────────────────────────────────
+  /** WebSocket endpoint of the Yellow clearnode (mainnet) */
+  YELLOW_CLEARNODE_URL_MAINNET: optional(
+    "YELLOW_CLEARNODE_URL_MAINNET",
+    "wss://clearnet.yellow.com/ws",
+  ),
+  /** Token symbol used for payouts on mainnet (e.g. "usdc") */
+  YELLOW_ASSET_MAINNET: optional("YELLOW_ASSET_MAINNET", "usdc"),
+  /** ERC20 token address of the payout asset on mainnet */
+  YELLOW_ASSET_ADDRESS_MAINNET: optional("YELLOW_ASSET_ADDRESS_MAINNET", ""),
+  /** Decimal places of the mainnet payout asset (USDC = 6) */
+  YELLOW_ASSET_DECIMALS_MAINNET: Number(optional("YELLOW_ASSET_DECIMALS_MAINNET", "6")),
+  /** Chain ID for mainnet on-chain operations (e.g. 1 = Ethereum mainnet) */
+  YELLOW_CHAIN_ID_MAINNET: process.env.YELLOW_CHAIN_ID_MAINNET
+    ? BigInt(process.env.YELLOW_CHAIN_ID_MAINNET)
+    : undefined,
+  /** JSON-RPC URL for the mainnet chain */
+  YELLOW_RPC_URL_MAINNET: optional("YELLOW_RPC_URL_MAINNET", ""),
+  /** Custody contract address on mainnet (Nitrolite) */
+  YELLOW_CUSTODY_ADDRESS_MAINNET: optional("YELLOW_CUSTODY_ADDRESS_MAINNET", ""),
+  /** Adjudicator contract address on mainnet (Nitrolite) */
+  YELLOW_ADJUDICATOR_ADDRESS_MAINNET: optional("YELLOW_ADJUDICATOR_ADDRESS_MAINNET", ""),
+
+  /** @deprecated — kept for backward compat, use the per-network vars above */
+  YELLOW_MAINNET: optional("YELLOW_MAINNET", "false") === "true",
+
+  /** Auto-approve + deposit platform funds on demand (development convenience, testnet only) */
   YELLOW_AUTOFUND: optional("YELLOW_AUTOFUND", "false") === "true",
   /** Amount (token units, not wei) to auto-approve/deposit when enabled */
   YELLOW_AUTOFUND_AMOUNT: optional("YELLOW_AUTOFUND_AMOUNT", "0"),

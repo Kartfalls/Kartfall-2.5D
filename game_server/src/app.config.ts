@@ -120,6 +120,10 @@ async function resolveWalletAddress(req: any): Promise<string> {
   return walletAddress;
 }
 
+const networkLabel = env.YELLOW_MAINNET ? "MAINNET" : "TESTNET";
+const chainId = env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : 11155111;
+console.log(`[Server] Starting on network=${networkLabel} | chainId=${chainId} | asset=${env.YELLOW_ASSET ?? "?"} | clearnode=${env.YELLOW_CLEARNODE_URL ?? "?"}`);
+
 const server = defineServer({
   /**
    * Define your room handlers:
@@ -244,6 +248,18 @@ const server = defineServer({
           walletAddress = "";
         }
 
+        // Pick testnet or mainnet config based on ?network= query param
+        const isMainnet = req.query?.network === "mainnet";
+        const netAsset        = isMainnet ? env.YELLOW_ASSET_MAINNET        : YELLOW_ASSET;
+        const netAssetAddr    = isMainnet ? env.YELLOW_ASSET_ADDRESS_MAINNET : env.YELLOW_ASSET_ADDRESS;
+        const netCustody      = isMainnet ? env.YELLOW_CUSTODY_ADDRESS_MAINNET : env.YELLOW_CUSTODY_ADDRESS;
+        const netAdjudicator  = isMainnet ? env.YELLOW_ADJUDICATOR_ADDRESS_MAINNET : env.YELLOW_ADJUDICATOR_ADDRESS;
+        const netChainId      = isMainnet
+          ? (env.YELLOW_CHAIN_ID_MAINNET ? Number(env.YELLOW_CHAIN_ID_MAINNET) : 1)
+          : (env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : 11155111);
+
+        console.log(`[API] /api/yellow/status network=${isMainnet ? "mainnet" : "testnet"} chainId=${netChainId} wallet=${walletAddress}`);
+
         const [
           nodeOk,
           playerBalance,
@@ -266,10 +282,9 @@ const server = defineServer({
 
         const platformConfigured =
           !!env.YELLOW_PRIVATE_KEY &&
-          !!env.YELLOW_ASSET_ADDRESS &&
-          !!env.YELLOW_CUSTODY_ADDRESS &&
-          !!env.YELLOW_ADJUDICATOR_ADDRESS &&
-          !!env.YELLOW_RPC_URL;
+          !!netAssetAddr &&
+          !!netCustody &&
+          !!netAdjudicator;
 
         const stakingAvailable =
           platformConfigured && env.YELLOW_ENABLED === true;
@@ -283,11 +298,11 @@ const server = defineServer({
           platformBalance,
           walletL1Balance: walletL1,
           custodyBalance,
-          asset: YELLOW_ASSET,
-          assetAddress: env.YELLOW_ASSET_ADDRESS,
-          custodyAddress: env.YELLOW_CUSTODY_ADDRESS,
-          adjudicatorAddress: env.YELLOW_ADJUDICATOR_ADDRESS,
-          chainId: env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : null,
+          asset: netAsset,
+          assetAddress: netAssetAddr,
+          custodyAddress: netCustody,
+          adjudicatorAddress: netAdjudicator,
+          chainId: netChainId,
           walletAddress,
           platformWallet: getPlatformAddress(),
         });

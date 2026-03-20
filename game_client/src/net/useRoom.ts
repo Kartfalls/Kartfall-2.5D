@@ -46,6 +46,7 @@ export function useKartfallRoom(
     stakeAmount?: number;
     matchDuration?: number;
     walletAddress?: string;
+    network?: string;
   } | null,
   networkConfig: NetworkConfig | null = null,
 ): UseRoomResult {
@@ -150,6 +151,10 @@ export function useKartfallRoom(
           opts.walletAddress = joinOptions.walletAddress;
         }
 
+        if (joinOptions.network) {
+          opts.network = joinOptions.network;
+        }
+
         // Only send the token if it looks like a real JWT (has dots)
         const currentToken = tokenRef.current;
         if (currentToken && currentToken.includes(".")) {
@@ -165,6 +170,8 @@ export function useKartfallRoom(
         const httpBase = networkConfig
           ? networkConfig.httpUrl
           : (import.meta.env.VITE_SERVER_URL_TESTNET || import.meta.env.VITE_SERVER_URL || "ws://localhost:2567").replace(/^ws(s?):/, "http$1:");
+
+        console.log(`[Kartfall] ${joinOptions.roomCode ? "Joining" : "Creating"} room on ${networkConfig?.mode ?? "testnet"} → ${networkConfig?.serverUrl ?? "default"}`);
 
         if (joinOptions.roomCode) {
           // Join a specific room by its custom roomCode.
