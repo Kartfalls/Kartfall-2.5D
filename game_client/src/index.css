@@ -2377,6 +2377,99 @@ body {
   }
 }
 
+/* ── Network selector tabs ── */
+.sk-network-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.sk-network-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.sk-network-tab:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sk-network-tab.disabled,
+.sk-network-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Testnet active */
+.sk-network-tab--testnet.active {
+  background: rgba(0, 232, 200, 0.12);
+  border-color: rgba(0, 232, 200, 0.4);
+  color: #00e8c8;
+}
+
+/* Mainnet active */
+.sk-network-tab--mainnet.active {
+  background: rgba(255, 165, 0, 0.12);
+  border-color: rgba(255, 165, 0, 0.45);
+  color: #ffb020;
+}
+
+/* Status dot */
+.sk-net-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.sk-network-tab--testnet.active .sk-net-dot {
+  background: #00e8c8;
+  opacity: 1;
+  box-shadow: 0 0 6px #00e8c8;
+  animation: net-dot-pulse 1.8s ease infinite;
+}
+
+.sk-network-tab--mainnet.active .sk-net-dot {
+  background: #ffb020;
+  opacity: 1;
+  box-shadow: 0 0 6px #ffb020;
+  animation: net-dot-pulse 1.8s ease infinite;
+}
+
+.sk-net-soon {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 2px;
+}
+
+@keyframes net-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
 /* ── Big PLAY button ── */
 .sk-play-btn {
   position: relative;

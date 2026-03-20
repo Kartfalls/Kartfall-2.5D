@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlayerProfile } from "../net/useProfile";
+import type { NetworkMode } from "../config/networks";
 
 const KART_SPRITE_W = 96;
 const KART_SPRITE_H = 96;
@@ -25,6 +26,8 @@ interface LobbyScreenProps {
   onUpdateProfileName?: (name: string) => Promise<PlayerProfile | null>;
   onOpenProfile?: () => void;
   walletAddress?: string | null;
+  networkMode?: NetworkMode;
+  onNetworkChange?: (mode: NetworkMode) => void;
 }
 
 export function LobbyScreen({
@@ -38,6 +41,8 @@ export function LobbyScreen({
   onUpdateProfileName,
   onOpenProfile,
   walletAddress,
+  networkMode = "testnet",
+  onNetworkChange,
 }: LobbyScreenProps) {
   const [name, setName] = useState("");
   const [roomCode, setRoomCode] = useState("");
@@ -69,7 +74,7 @@ export function LobbyScreen({
     };
   }, []);
 
-  const isMainnet = import.meta.env.VITE_YELLOW_MAINNET === "true";
+  const isMainnet = networkMode === "mainnet";
   const assetSymbol = "TOKEN";
   const shortenedWallet =
     walletAddress && walletAddress.length > 10
@@ -316,6 +321,26 @@ export function LobbyScreen({
         </div>
 
         <div className="sk-hero-kart">{renderKartFrame(1.5)}</div>
+
+        {/* ── Network selector ── */}
+        <div className="sk-network-tabs">
+          <button
+            className={`sk-network-tab sk-network-tab--testnet${networkMode === "testnet" ? " active" : ""}`}
+            onClick={() => onNetworkChange?.("testnet")}
+            type="button"
+          >
+            <span className="sk-net-dot" />
+            Testnet
+          </button>
+          <button
+            className={`sk-network-tab sk-network-tab--mainnet${networkMode === "mainnet" ? " active" : ""}`}
+            onClick={() => onNetworkChange?.("mainnet")}
+            type="button"
+          >
+            <span className="sk-net-dot" />
+            Mainnet
+          </button>
+        </div>
 
         {/* Big Play Button */}
         {authenticated && (

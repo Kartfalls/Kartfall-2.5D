@@ -3,6 +3,7 @@ import { useWallets } from "@privy-io/react-auth";
 import { Client, StateSigner, TransactionSigner } from "@yellow-org/sdk";
 import { EthereumMsgSigner } from "@yellow-org/sdk/dist/signers";
 import { ethers } from "ethers";
+import type { NetworkConfig } from "../config/networks";
 
 // A custom TransactionSigner wrapper because Yellow expects viem-like objects
 class EthersTransactionSigner implements TransactionSigner {
@@ -38,7 +39,7 @@ const CHAIN_META: Record<number, { chainName: string; rpcUrls: string[]; nativeC
   8453:  { chainName: "Base",             rpcUrls: ["https://mainnet.base.org"],            nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://basescan.org"] },
 };
 
-export function useYellowClient() {
+export function useYellowClient(networkConfig: NetworkConfig | null = null) {
     const { wallets } = useWallets();
     const [yellowClient, setYellowClient] = useState<Client | null>(null);
     const [isInitializing, setIsInitializing] = useState(false);
@@ -74,8 +75,8 @@ export function useYellowClient() {
             // 2. Wrap it with ethers.js Web3Provider
             const web3Provider = new ethers.BrowserProvider(provider as any);
 
-            // Switch to the configured chain (reads VITE_YELLOW_CHAIN_ID, falls back to Sepolia)
-            const targetChainId = Number(import.meta.env.VITE_YELLOW_CHAIN_ID || DEFAULT_CHAIN_ID);
+            // Switch to the configured chain (network-specific or env fallback)
+            const targetChainId = networkConfig?.chainId ?? Number(import.meta.env.VITE_YELLOW_CHAIN_ID || DEFAULT_CHAIN_ID);
             const chainIdHex = `0x${targetChainId.toString(16)}`;
             try {
                 await withTimeout(
@@ -111,7 +112,7 @@ export function useYellowClient() {
             const txSigner: TransactionSigner = new EthersTransactionSigner(signer);
 
             // 4. Instantiate Yellow Client
-            const clearNodeUrl = import.meta.env.VITE_YELLOW_URL || DEFAULT_URL;
+            const clearNodeUrl = networkConfig?.yellowUrl ?? import.meta.env.VITE_YELLOW_URL ?? DEFAULT_URL;
 
             const client = await withTimeout(
                 Client.create(clearNodeUrl, stateSigner, txSigner),
@@ -146,7 +147,7 @@ export function useYellowClient() {
         initClient,
         isInitializing,
         error,
-    defaultAsset: import.meta.env.VITE_YELLOW_ASSET || DEFAULT_ASSET,
-        defaultChainId: BigInt(import.meta.env.VITE_YELLOW_CHAIN_ID || DEFAULT_CHAIN_ID)
+    defaultAsset: networkConfig?.yellowAsset ?? import.meta.env.VITE_YELLOW_ASSET ?? DEFAULT_ASSET,
+        defaultChainId: BigInt(networkConfig?.chainId ?? import.meta.env.VITE_YELLOW_CHAIN_ID ?? DEFAULT_CHAIN_ID)
     };
 }

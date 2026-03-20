@@ -1,10 +1,20 @@
-/**
- * Colyseus Client singleton.
- * Uses VITE_SERVER_URL env var, falls back to localhost.
- */
 import { Client } from "@colyseus/sdk";
 
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
+/**
+ * Create a Colyseus client for a specific server URL.
+ * Each network mode gets its own client instance.
+ */
+export function createColyseusClient(serverUrl: string): Client {
+  return new Client(serverUrl);
+}
 
-export const colyseusClient = new Client(SERVER_URL);
+/**
+ * Legacy fallback singleton for reconnection flow.
+ * Uses VITE_SERVER_URL_TESTNET → VITE_SERVER_URL → localhost.
+ */
+const DEFAULT_SERVER_URL =
+  import.meta.env.VITE_SERVER_URL_TESTNET ||
+  import.meta.env.VITE_SERVER_URL ||
+  "ws://localhost:2567";
+
+export const colyseusClient = new Client(DEFAULT_SERVER_URL);

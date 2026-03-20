@@ -15,6 +15,7 @@ import { ProfileScreen } from "./ui/ProfileScreen";
 import type { Room } from "@colyseus/sdk";
 import { EventBus } from "./game/EventBus";
 import { EscapeMenu } from "./ui/EscapeMenu";
+import { type NetworkMode, getNetworkConfig } from "./config/networks";
 
 const KART_COLORS = ["yellow", "red", "purple", "black"] as const;
 
@@ -27,6 +28,9 @@ export default function App() {
   const { ready, authenticated, login, getAccessToken, user } = usePrivy();
   const { wallets } = useWallets();
   const [token, setToken] = useState<string | null>(null);
+  const [networkMode, setNetworkMode] = useState<NetworkMode>("testnet");
+  const networkConfig = useMemo(() => getNetworkConfig(networkMode), [networkMode]);
+
   const [joinOptions, setJoinOptions] = useState<{
     name: string;
     roomCode?: string;
@@ -46,7 +50,7 @@ export default function App() {
     getAccessToken().then((t) => setToken(t));
   }, [ready, authenticated, getAccessToken]);
 
-  const { room, phase, error } = useKartfallRoom(token, joinOptions);
+  const { room, phase, error } = useKartfallRoom(token, joinOptions, networkConfig);
   const {
     profile,
     loading: profileLoading,
@@ -230,6 +234,8 @@ export default function App() {
           onUpdateProfileName={updateName}
           onOpenProfile={() => setShowProfile(true)}
           walletAddress={activeWalletAddress}
+          networkMode={networkMode}
+          onNetworkChange={setNetworkMode}
         />
       );
     }

@@ -4,8 +4,9 @@
  * Returns the room instance, current phase, and any connection error.
  */
 import { useState, useEffect, useRef } from "react";
+import { Client, getStateCallbacks, type Room } from "@colyseus/sdk";
 import { colyseusClient } from "./client";
-import { getStateCallbacks, type Room } from "@colyseus/sdk";
+import type { NetworkConfig } from "../config/networks";
 
 interface UseRoomResult {
   room: Room | null;
@@ -16,22 +17,11 @@ interface UseRoomResult {
 const RECONNECTION_KEY = "kartfall_reconnection_token";
 
 /**
- * Resolve the Colyseus server HTTP base URL from the WS URL.
- * ws://localhost:2567 → http://localhost:2567
- * wss://example.com → https://example.com
- */
-function getHttpEndpoint(): string {
-  const wsUrl = import.meta.env.VITE_SERVER_URL || "ws://localhost:2567";
-  return wsUrl.replace(/^ws(s?):/, "http$1:");
-}
-
-/**
  * Find a room's Colyseus roomId from its custom roomCode
  * by querying the Colyseus matchmake listing API.
  */
-async function findRoomByCode(roomCode: string): Promise<string | null> {
+async function findRoomByCode(roomCode: string, httpBase: string): Promise<string | null> {
   try {
-    const httpBase = getHttpEndpoint();
     const resp = await fetch(`${httpBase}/api/rooms`);
     if (!resp.ok) return null;
 
@@ -57,6 +47,7 @@ export function useKartfallRoom(
     matchDuration?: number;
     walletAddress?: string;
   } | null,
+  networkConfig: NetworkConfig | null = null,
 ): UseRoomResult {
   const [room, setRoom] = useState<Room | null>(null);
   const [phase, setPhase] = useState("lobby");
@@ -167,19 +158,27 @@ export function useKartfallRoom(
 
         let r: Room | null = null;
 
+        // Use network-specific client if config provided, otherwise fall back to default
+        const activeClient = networkConfig
+          ? new Client(networkConfig.serverUrl)
+          : colyseusClient;
+        const httpBase = networkConfig
+          ? networkConfig.httpUrl
+          : (import.meta.env.VITE_SERVER_URL_TESTNET || import.meta.env.VITE_SERVER_URL || "ws://localhost:2567").replace(/^ws(s?):/, "http$1:");
+
         if (joinOptions.roomCode) {
           // Join a specific room by its custom roomCode.
           // First, find the actual Colyseus roomId for this code.
-          const roomId = await findRoomByCode(joinOptions.roomCode);
+          const roomId = await findRoomByCode(joinOptions.roomCode, httpBase);
           if (!roomId) {
             throw new Error(
               `Room "${joinOptions.roomCode}" not found. Check the code and try again.`,
             );
           }
-          r = await colyseusClient.joinById(roomId, opts);
+          r = await activeClient.joinById(roomId, opts);
         } else {
           // Create a new room (use create to guarantee a fresh room)
-          r = await colyseusClient.create("kartfall_room", opts);
+          r = await activeClient.create("kartfall_room", opts);
         }
 
         if (attemptId !== joinAttemptRef.current) {
