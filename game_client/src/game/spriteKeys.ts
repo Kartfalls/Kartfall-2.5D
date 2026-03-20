@@ -44,6 +44,12 @@ export const TEX_PICKUP_BOMB = "pickup_bomb";
 export const TEX_PICKUP_BULLET = "pickup_bullet";
 export const TEX_PICKUP_GLOW = "pickup_glow";
 export const TEX_PICKUP_CRATE = "pickup_crate";
+export const TEX_PICKUP_SNIPER = "pickup_sniper";
+export const TEX_PICKUP_MINE = "pickup_mine";
+export const TEX_PICKUP_SHOCKWAVE = "pickup_shockwave";
+
+/* ── Shockwave VFX ── */
+export const TEX_SHOCKWAVE_RING = "shockwave_ring";
 
 /* ── Particle texture keys ── */
 export const TEX_PARTICLE_SMOKE = "particle_smoke";

@@ -34,7 +34,7 @@ import {
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { sepolia, mainnet, polygon, arbitrum, optimism, base } from "viem/chains";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -50,14 +50,24 @@ const CUSTODY_ADDRESS = env.YELLOW_CUSTODY_ADDRESS;
 const ADJUDICATOR_ADDRESS = env.YELLOW_ADJUDICATOR_ADDRESS;
 const CHAIN_ID = env.YELLOW_CHAIN_ID ? Number(env.YELLOW_CHAIN_ID) : sepolia.id;
 const RPC_URL = env.YELLOW_RPC_URL;
-const AUTO_FUND = env.YELLOW_AUTOFUND;
+// Force autofund off on mainnet regardless of YELLOW_AUTOFUND env var
+const AUTO_FUND = env.YELLOW_AUTOFUND && !env.YELLOW_MAINNET;
 const AUTO_FUND_AMOUNT = new Decimal(env.YELLOW_AUTOFUND_AMOUNT || "0");
 const custodyAbi = CustodyAbi;
 
+/** Map known chain IDs to their viem Chain objects. Unknown IDs fall back to a
+ *  minimal chain descriptor so viem can still sign/broadcast correctly. */
+const KNOWN_CHAINS: Record<number, Chain> = {
+  [mainnet.id]:  mainnet,
+  [sepolia.id]:  sepolia,
+  [polygon.id]:  polygon,
+  [arbitrum.id]: arbitrum,
+  [optimism.id]: optimism,
+  [base.id]:     base,
+};
+
 const getChain = (): Chain =>
-  CHAIN_ID === sepolia.id
-    ? sepolia
-    : ({ ...sepolia, id: CHAIN_ID } as Chain);
+  KNOWN_CHAINS[CHAIN_ID] ?? ({ ...sepolia, id: CHAIN_ID } as Chain);
 
 // ---------------------------------------------------------------------------
 // WebSocket RPC client

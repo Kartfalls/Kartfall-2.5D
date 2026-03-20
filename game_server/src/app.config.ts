@@ -148,6 +148,20 @@ const server = defineServer({
   express: (app) => {
     app.use(express.json());
 
+    // Allow cross-origin requests from the Vite dev server and any deployed client.
+    app.use((req, res, next) => {
+      const origin = req.headers.origin || "*";
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+
     app.get("/hi", (req, res) => {
       res.send("It's time to kick ass and chew bubblegum!");
     });
@@ -317,6 +331,11 @@ const server = defineServer({
             res
               .status(400)
               .json({ error: "No wallet found for authenticated user" });
+            return;
+          }
+
+          if (env.YELLOW_MAINNET) {
+            res.status(403).json({ error: "Faucet is not available on mainnet." });
             return;
           }
 

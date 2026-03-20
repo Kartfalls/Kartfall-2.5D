@@ -28,6 +28,16 @@ const DEFAULT_URL = "wss://clearnet-sandbox.yellow.com/ws";
 const DEFAULT_CHAIN_ID = 11155111; // Ethereum Sepolia
 const DEFAULT_ASSET = "ytest.usd"; // Sandbox asset symbol
 
+/** Known chain metadata keyed by chain ID, used for wallet_addEthereumChain. */
+const CHAIN_META: Record<number, { chainName: string; rpcUrls: string[]; nativeCurrency: { name: string; symbol: string; decimals: number }; blockExplorerUrls: string[] }> = {
+  1:     { chainName: "Ethereum",         rpcUrls: ["https://eth.llamarpc.com"],           nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://etherscan.io"] },
+  11155111: { chainName: "Ethereum Sepolia", rpcUrls: ["https://rpc.sepolia.org"],             nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://sepolia.etherscan.io"] },
+  137:   { chainName: "Polygon",           rpcUrls: ["https://polygon-rpc.com"],            nativeCurrency: { name: "POL",     symbol: "POL",   decimals: 18 }, blockExplorerUrls: ["https://polygonscan.com"] },
+  42161: { chainName: "Arbitrum One",     rpcUrls: ["https://arb1.arbitrum.io/rpc"],        nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://arbiscan.io"] },
+  10:    { chainName: "Optimism",          rpcUrls: ["https://mainnet.optimism.io"],         nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://optimistic.etherscan.io"] },
+  8453:  { chainName: "Base",             rpcUrls: ["https://mainnet.base.org"],            nativeCurrency: { name: "Ether",   symbol: "ETH",   decimals: 18 }, blockExplorerUrls: ["https://basescan.org"] },
+};
+
 export function useYellowClient() {
     const { wallets } = useWallets();
     const [yellowClient, setYellowClient] = useState<Client | null>(null);
@@ -64,8 +74,9 @@ export function useYellowClient() {
             // 2. Wrap it with ethers.js Web3Provider
             const web3Provider = new ethers.BrowserProvider(provider as any);
 
-            // Request network switch just in case (Ethereum Sepolia)
-            const chainIdHex = `0x${DEFAULT_CHAIN_ID.toString(16)}`;
+            // Switch to the configured chain (reads VITE_YELLOW_CHAIN_ID, falls back to Sepolia)
+            const targetChainId = Number(import.meta.env.VITE_YELLOW_CHAIN_ID || DEFAULT_CHAIN_ID);
+            const chainIdHex = `0x${targetChainId.toString(16)}`;
             try {
                 await withTimeout(
                     web3Provider.send("wallet_switchEthereumChain", [{ chainId: chainIdHex }]),
@@ -73,17 +84,12 @@ export function useYellowClient() {
                     12000
                 );
             } catch (switchError: any) {
-                // If the chain is not added to wallet
+                // Chain not in wallet yet — add it using our metadata map
                 if (switchError.code === 4902) {
+                    const meta = CHAIN_META[targetChainId] ?? CHAIN_META[DEFAULT_CHAIN_ID];
                     await withTimeout(
                         web3Provider.send("wallet_addEthereumChain", [
-                            {
-                                chainId: chainIdHex,
-                                chainName: "Ethereum Sepolia",
-                                rpcUrls: ["https://rpc.sepolia.org"],
-                                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-                                blockExplorerUrls: ["https://sepolia.etherscan.io"],
-                            },
+                            { chainId: chainIdHex, ...meta },
                         ]),
                         "Add chain",
                         12000

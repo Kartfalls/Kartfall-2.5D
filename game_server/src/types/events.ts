@@ -28,7 +28,7 @@ export interface KillEvent {
 }
 
 export interface ExplosionEvent {
-  type: "rocket" | "bomb";
+  type: "rocket" | "bomb" | "mine" | "shockwave" | "sniper";
   x: number;
   y: number;
   radius: number;

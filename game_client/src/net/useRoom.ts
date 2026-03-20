@@ -40,7 +40,8 @@ async function findRoomByCode(roomCode: string): Promise<string | null> {
 
     const match = rooms.find((r) => r.metadata?.roomCode === roomCode);
     return match?.roomId ?? null;
-  } catch {
+  } catch (err) {
+    console.warn("[findRoomByCode] fetch failed:", err);
     return null;
   }
 }

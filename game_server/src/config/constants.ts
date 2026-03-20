@@ -38,6 +38,22 @@ export const GAME = {
   MIN_BET_WEI: 100_000n, // 0.1 USDC
   MAX_BET_WEI: 10_000_000n, // 10 USDC
 
+  // Hazard zone (center red-stripe area)
+  HAZARD_ZONE: { x: 680, y: 520, w: 240, h: 160 } as { x: number; y: number; w: number; h: number },
+  HAZARD_INTERVAL_MS: 500, // apply damage every 500ms
+  HAZARD_DMG: 8,           // 8 HP per interval = ~16 HP/sec
+
+  // Boost pads
+  BOOST_PAD_POSITIONS: [
+    { x: 400, y: 400 },
+    { x: 1200, y: 400 },
+    { x: 400, y: 800 },
+    { x: 1200, y: 800 },
+  ] as { x: number; y: number }[],
+  BOOST_PAD_R: 60,           // px radius to activate pad
+  BOOST_DURATION_MS: 1500,   // how long boost lasts
+  BOOST_SPEED_MULT: 1.5,     // speed multiplier while boosted
+
   // Anti-cheat
   INPUT_THROTTLE_MS: 45,
   READY_DEBOUNCE_MS: 500,

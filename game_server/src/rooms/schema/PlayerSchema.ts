@@ -34,6 +34,10 @@ export class PlayerSchema extends Schema {
   @type("boolean") isDamaged: boolean = false;
   @type("uint8") colorIndex: number = 0; // 0=yellow, 1=red, 2=purple, 3=black
 
+  // ── Timed states ──
+  @type("float64") boostedUntil: number = 0;      // epoch ms — speed boost from pad
+  @type("float64") pulseChargeUntil: number = 0;  // epoch ms — shockwave charging
+
   // ── Internal (not synced) ──
   /** Timestamp of last processed input (for rate limiting) */
   lastInputTime: number = 0;

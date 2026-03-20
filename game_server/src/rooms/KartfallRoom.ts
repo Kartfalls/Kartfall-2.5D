@@ -56,6 +56,9 @@ export class KartfallRoom extends Room {
 
   private nextColorIndex = 0;
 
+  // ── Kill streak tracking (in-memory, not synced to schema) ──
+  private streakBySession = new Map<string, number>();
+
   /* ================================================================
    * LIFECYCLE HOOKS
    * ================================================================ */
@@ -81,9 +84,33 @@ export class KartfallRoom extends Room {
     this.combatSystem = new CombatSystem(
       this as unknown as Room,
       state,
-      (killerId, victimId, weapon) => {
-        // onKill callback — resolve live bet markets
+      (killerId, victimId, _weapon) => {
+        // Resolve live bet markets
         this.betManager.resolveKillEvent(killerId, victimId);
+
+        // Reset victim streak
+        this.streakBySession.set(victimId, 0);
+
+        // Increment killer streak + broadcast if milestone
+        if (killerId !== "hazard" && killerId !== victimId) {
+          const prev = this.streakBySession.get(killerId) ?? 0;
+          const streak = prev + 1;
+          this.streakBySession.set(killerId, streak);
+
+          if (streak >= 2) {
+            const killer = this.state.players.get(killerId);
+            const label =
+              streak === 2 ? "DOUBLE KILL" :
+              streak === 3 ? "TRIPLE KILL" :
+              "RAMPAGE";
+            this.broadcast("streak_event", {
+              playerId: killerId,
+              playerName: killer?.name ?? "Unknown",
+              streak,
+              label,
+            });
+          }
+        }
       },
     );
 
@@ -342,6 +369,7 @@ export class KartfallRoom extends Room {
     });
 
     this.state.players.delete(client.sessionId);
+    this.streakBySession.delete(client.sessionId);
 
     // Check if match should end due to too few players
     if (phase === "playing") {

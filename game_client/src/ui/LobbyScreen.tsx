@@ -69,6 +69,7 @@ export function LobbyScreen({
     };
   }, []);
 
+  const isMainnet = import.meta.env.VITE_YELLOW_MAINNET === "true";
   const assetSymbol = "TOKEN";
   const shortenedWallet =
     walletAddress && walletAddress.length > 10
@@ -211,17 +212,19 @@ export function LobbyScreen({
           >
             {copied ? "Copied" : "Copy Address"}
           </button>
-          <div className="sk-faucet-row">
-            <span>Need test funds?</span>
-            <a
-              className="sk-faucet-link"
-              href="https://ytest-faucet.vercel.app/"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Get Faucet
-            </a>
-          </div>
+          {!isMainnet && (
+            <div className="sk-faucet-row">
+              <span>Need test funds?</span>
+              <a
+                className="sk-faucet-link"
+                href="https://ytest-faucet.vercel.app/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Get Faucet
+              </a>
+            </div>
+          )}
         </div>
 
         {/* Game Mode */}

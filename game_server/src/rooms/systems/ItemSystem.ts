@@ -62,15 +62,12 @@ export class ItemSystem {
 
     // Set ammo based on weapon type
     switch (weapon) {
-      case "rocket":
-        player.weaponAmmo = WEAPONS.rocket.ammo;
-        break;
-      case "bomb":
-        player.weaponAmmo = WEAPONS.bomb.ammo;
-        break;
-      case "bullet":
-        player.weaponAmmo = WEAPONS.bullet.ammo;
-        break;
+      case "rocket":    player.weaponAmmo = WEAPONS.rocket.ammo;    break;
+      case "bomb":      player.weaponAmmo = WEAPONS.bomb.ammo;      break;
+      case "bullet":    player.weaponAmmo = WEAPONS.bullet.ammo;    break;
+      case "sniper":    player.weaponAmmo = WEAPONS.sniper.ammo;    break;
+      case "mine":      player.weaponAmmo = WEAPONS.mine.ammo;      break;
+      case "shockwave": player.weaponAmmo = WEAPONS.shockwave.ammo; break;
     }
 
     // Mark crate as picked up

@@ -35,6 +35,12 @@ export const WALLS: WallRect[] = [
   { x: 920, y: 300, w: 80, h: 64 }, // top-right pod
   { x: 600, y: 836, w: 80, h: 64 }, // bottom-left pod
   { x: 920, y: 836, w: 80, h: 64 }, // bottom-right pod
+
+  // ── Tactical cover blocks (upper/lower corridor flanks) ──
+  { x: 550, y: 160, w: 80, h: 120 }, // upper-left cover
+  { x: 970, y: 160, w: 80, h: 120 }, // upper-right cover
+  { x: 550, y: 920, w: 80, h: 120 }, // lower-left cover
+  { x: 970, y: 920, w: 80, h: 120 }, // lower-right cover
 ];
 
 /** Player spawns — one per color slot (P1–P4). */

@@ -13,8 +13,12 @@ import {
   TEX_PICKUP_ROCKET,
   TEX_PICKUP_BOMB,
   TEX_PICKUP_BULLET,
+  TEX_PICKUP_SNIPER,
+  TEX_PICKUP_MINE,
+  TEX_PICKUP_SHOCKWAVE,
   TEX_PICKUP_GLOW,
   TEX_PICKUP_CRATE,
+  TEX_SHOCKWAVE_RING,
   TEX_PARTICLE_SMOKE,
   TEX_PARTICLE_SPARK,
   TEX_PARTICLE_EXHAUST,
@@ -77,6 +81,19 @@ const WALLS: Rect[] = [
   { x: 920, y: 300, w: 80, h: 64 }, // top-right pod
   { x: 600, y: 836, w: 80, h: 64 }, // bottom-left pod
   { x: 920, y: 836, w: 80, h: 64 }, // bottom-right pod
+
+  // ── Tactical cover blocks ──
+  { x: 550, y: 160, w: 80, h: 120 }, // upper-left cover
+  { x: 970, y: 160, w: 80, h: 120 }, // upper-right cover
+  { x: 550, y: 920, w: 80, h: 120 }, // lower-left cover
+  { x: 970, y: 920, w: 80, h: 120 }, // lower-right cover
+];
+
+const BOOST_PAD_POSITIONS = [
+  { x: 400, y: 400 },
+  { x: 1200, y: 400 },
+  { x: 400, y: 800 },
+  { x: 1200, y: 800 },
 ];
 
 const CRATE_POSITIONS = [
@@ -102,17 +119,24 @@ interface PlayerLike {
 function getKartState(player: PlayerLike, isFiring: boolean): KartState {
   if (!player.isAlive) return "dead";
 
+  // Map new weapon types onto existing kart animation states
+  const effectiveWeapon =
+    player.weaponType === "sniper" ? "rocket" :
+    player.weaponType === "mine" ? "bomb" :
+    player.weaponType === "shockwave" ? "bullet" :
+    player.weaponType;
+
   if (isFiring) {
-    if (player.weaponType === "rocket") return "firing_rocket";
-    if (player.weaponType === "bullet") return "firing_bullet";
-    if (player.weaponType === "bomb") return "firing_bomb";
+    if (effectiveWeapon === "rocket") return "firing_rocket";
+    if (effectiveWeapon === "bullet") return "firing_bullet";
+    if (effectiveWeapon === "bomb") return "firing_bomb";
   }
 
   if (player.isDamaged) return "damaged";
 
-  if (player.weaponType === "rocket") return "holding_rocket";
-  if (player.weaponType === "bomb") return "holding_bomb";
-  if (player.weaponType === "bullet") return "holding_bullet";
+  if (effectiveWeapon === "rocket") return "holding_rocket";
+  if (effectiveWeapon === "bomb") return "holding_bomb";
+  if (effectiveWeapon === "bullet") return "holding_bullet";
 
   if (player.isBoosting) return "boost";
 
@@ -126,6 +150,7 @@ function getKartState(player: PlayerLike, isFiring: boolean): KartState {
 interface KartEntity {
   sprite: Phaser.GameObjects.Sprite;
   exhaust: Phaser.GameObjects.Particles.ParticleEmitter | null;
+  speedLines: Phaser.GameObjects.Particles.ParticleEmitter | null;
   firingUntil: number; // timestamp
   targetX: number;
   targetY: number;
@@ -224,6 +249,7 @@ export class Game extends Phaser.Scene {
 
     // Build arena
     this.buildTilemap();
+    this.drawBoostPads();
 
     // Mini-map camera (bottom-left overlay)
     const miniSize = DISPLAY.MINIMAP_SIZE;
@@ -604,18 +630,23 @@ export class Game extends Phaser.Scene {
     this.room.onMessage(
       "explosion_event",
       (data: { x: number; y: number; type: string; radius: number }) => {
-        const animKey =
-          data.type === "bomb" ? ANIM_EXPLOSION_BOMB : ANIM_EXPLOSION_ROCKET;
-        const texKey =
-          data.type === "bomb" ? "explosion_bomb" : "explosion_rocket";
+        if (data.type === "shockwave") {
+          this.spawnShockwaveRing(data.x, data.y);
+          this.spawnExplosionSmoke(data.x, data.y);
+        } else {
+          const animKey =
+            data.type === "bomb" || data.type === "mine" ? ANIM_EXPLOSION_BOMB : ANIM_EXPLOSION_ROCKET;
+          const texKey =
+            data.type === "bomb" || data.type === "mine" ? "explosion_bomb" : "explosion_rocket";
 
-        const expl = this.add.sprite(data.x, data.y, texKey);
-        this.layerVFX.add(expl);
-        expl.play(animKey);
-        expl.once("animationcomplete", () => expl.destroy());
+          const expl = this.add.sprite(data.x, data.y, texKey);
+          this.layerVFX.add(expl);
+          expl.play(animKey);
+          expl.once("animationcomplete", () => expl.destroy());
 
-        // Smoke particles
-        this.spawnExplosionSmoke(data.x, data.y);
+          // Smoke particles
+          this.spawnExplosionSmoke(data.x, data.y);
+        }
 
         // Screen shake based on distance to local player
         const localKart = this.karts.get(this.localSessionId);
@@ -753,6 +784,14 @@ export class Game extends Phaser.Scene {
       EventBus.emit("game-finished", data);
     });
 
+    // Kill streak announcements
+    this.room.onMessage(
+      "streak_event",
+      (data: { playerId: string; playerName: string; streak: number; label: string }) => {
+        EventBus.emit("streak-event", data);
+      },
+    );
+
     // Countdown
     this.room.onMessage("countdown_start", (data: any) => {
       this.playSfx(AUDIO_KEYS.SFX_COUNTDOWN, 0.9);
@@ -875,9 +914,27 @@ export class Game extends Phaser.Scene {
       this.layerParticles.add(exhaust);
     }
 
+    // Speed-lines emitter (boost visual — starts paused)
+    let speedLines: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+    if (this.textures.exists(TEX_PARTICLE_SPARK)) {
+      speedLines = this.add.particles(0, 0, TEX_PARTICLE_SPARK, {
+        follow: sprite,
+        lifespan: 200,
+        speed: { min: 80, max: 160 },
+        scale: { start: 0.8, end: 0 },
+        alpha: { start: 0.9, end: 0 },
+        tint: 0xffe066,
+        quantity: 3,
+        frequency: 30,
+        emitting: false,
+      });
+      this.layerParticles.add(speedLines);
+    }
+
     this.karts.set(sessionId, {
       sprite,
       exhaust,
+      speedLines,
       firingUntil: 0,
       targetX: player.x,
       targetY: player.y,
@@ -936,6 +993,16 @@ export class Game extends Phaser.Scene {
     if (entity.exhaust) {
       entity.exhaust.setVisible(player.isAlive);
     }
+
+    // Speed-line particles when boosting
+    if (entity.speedLines) {
+      const isBoosting = player.isBoosting && player.isAlive;
+      if (isBoosting && !entity.speedLines.emitting) {
+        entity.speedLines.start();
+      } else if (!isBoosting && entity.speedLines.emitting) {
+        entity.speedLines.stop();
+      }
+    }
   }
 
   private destroyKart(sessionId: string): void {
@@ -943,6 +1010,7 @@ export class Game extends Phaser.Scene {
     if (!entity) return;
     entity.sprite.destroy();
     entity.exhaust?.destroy();
+    entity.speedLines?.destroy();
     this.karts.delete(sessionId);
   }
 
@@ -978,9 +1046,25 @@ export class Game extends Phaser.Scene {
     const sprite = this.add.sprite(bomb.x, bomb.y, TEX_PROJ_BOMB, 0);
     sprite.setDepth(sprite.y);
     this.layerEntities.add(sprite);
-    if (this.anims.exists(ANIM_BOMB_SPIN)) {
-      sprite.play(ANIM_BOMB_SPIN);
+
+    if (bomb.isMine) {
+      // Mine: stationary on floor, red tint, pulsing alpha
+      sprite.setTint(0xff3333);
+      sprite.setScale(1.4);
+      this.tweens.add({
+        targets: sprite,
+        alpha: { from: 1, to: 0.5 },
+        duration: 600,
+        yoyo: true,
+        repeat: -1,
+        ease: "sine.inOut",
+      });
+    } else {
+      if (this.anims.exists(ANIM_BOMB_SPIN)) {
+        sprite.play(ANIM_BOMB_SPIN);
+      }
     }
+
     this.bombs.set(id, { sprite });
   }
 
@@ -1069,6 +1153,15 @@ export class Game extends Phaser.Scene {
     } else if (crate.weaponType === "bullet") {
       entity.icon.setTexture(TEX_PICKUP_BULLET);
       entity.icon.setTint(0x7dd3fc);
+    } else if (crate.weaponType === "sniper") {
+      entity.icon.setTexture(TEX_PICKUP_SNIPER);
+      entity.icon.setTint(0xe8e8e8);
+    } else if (crate.weaponType === "mine") {
+      entity.icon.setTexture(TEX_PICKUP_MINE);
+      entity.icon.setTint(0xff4444);
+    } else if (crate.weaponType === "shockwave") {
+      entity.icon.setTexture(TEX_PICKUP_SHOCKWAVE);
+      entity.icon.setTint(0x44aaff);
     } else {
       entity.icon.setTint(0xf4e9d8);
     }
@@ -1248,6 +1341,78 @@ export class Game extends Phaser.Scene {
     });
   }
 
+  /* ──────────────── BOOST PADS ──────────────── */
+
+  private drawBoostPads(): void {
+    for (const pad of BOOST_PAD_POSITIONS) {
+      const g = this.add.graphics();
+      g.setDepth(0);
+
+      // Glowing pad base
+      g.fillStyle(0xffe066, 0.18);
+      g.fillCircle(pad.x, pad.y, 56);
+      g.lineStyle(2, 0xffe066, 0.6);
+      g.strokeCircle(pad.x, pad.y, 56);
+
+      // Forward arrow (pointing right as a generic arrow — context-free)
+      const arrowColor = 0xffe066;
+      g.fillStyle(arrowColor, 0.9);
+      // Chevron: two triangles forming >>
+      for (let i = 0; i < 2; i++) {
+        const ox = pad.x - 16 + i * 18;
+        const oy = pad.y;
+        g.fillTriangle(ox, oy - 14, ox + 16, oy, ox, oy + 14);
+      }
+
+      // Pulsing alpha tween on the graphics object
+      this.tweens.add({
+        targets: g,
+        alpha: { from: 0.6, to: 1.0 },
+        duration: 700,
+        yoyo: true,
+        repeat: -1,
+        ease: "sine.inOut",
+      });
+    }
+  }
+
+  /* ──────────────── SHOCKWAVE VFX ──────────────── */
+
+  private spawnShockwaveRing(x: number, y: number): void {
+    if (!this.textures.exists(TEX_SHOCKWAVE_RING)) return;
+
+    const ring = this.add.image(x, y, TEX_SHOCKWAVE_RING);
+    ring.setScale(0.1);
+    ring.setAlpha(0.9);
+    ring.setBlendMode(Phaser.BlendModes.ADD);
+    ring.setDepth(200);
+    this.layerVFX.add(ring);
+
+    this.tweens.add({
+      targets: ring,
+      scale: 3.0,
+      alpha: 0,
+      duration: 600,
+      ease: "quad.out",
+      onComplete: () => ring.destroy(),
+    });
+
+    // Small camera shake for local player
+    const localKart = this.karts.get(this.localSessionId);
+    if (localKart) {
+      const dist = Phaser.Math.Distance.Between(
+        localKart.sprite.x,
+        localKart.sprite.y,
+        x,
+        y,
+      );
+      if (dist < 400) {
+        const intensity = Math.max(0.002, 0.01 * (1 - dist / 400));
+        this.cameras.main.shake(250, intensity);
+      }
+    }
+  }
+
   /* ──────────────── CLEANUP ──────────────── */
 
   shutdown(): void {
@@ -1263,6 +1428,7 @@ export class Game extends Phaser.Scene {
     this.karts.forEach((e) => {
       e.sprite.destroy();
       e.exhaust?.destroy();
+      e.speedLines?.destroy();
     });
     this.karts.clear();
 

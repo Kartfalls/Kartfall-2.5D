@@ -66,16 +66,22 @@ export class MovementSystem {
     dy: number,
     dtSec: number,
   ): void {
+    // Boost pad: apply speed multiplier if active
+    const now = Date.now();
+    const maxSpeed = (player.boostedUntil > 0 && now < player.boostedUntil)
+      ? GAME.MOVE_SPEED * GAME.BOOST_SPEED_MULT
+      : GAME.MOVE_SPEED;
+
     if (dx !== 0 || dy !== 0) {
       // Accelerate toward input direction
       player.vx += dx * GAME.MOVE_ACCEL * dtSec;
       player.vy += dy * GAME.MOVE_ACCEL * dtSec;
 
-      // Clamp to max speed
+      // Clamp to max speed (boosted or normal)
       const speed = Math.sqrt(player.vx ** 2 + player.vy ** 2);
-      if (speed > GAME.MOVE_SPEED) {
-        player.vx = (player.vx / speed) * GAME.MOVE_SPEED;
-        player.vy = (player.vy / speed) * GAME.MOVE_SPEED;
+      if (speed > maxSpeed) {
+        player.vx = (player.vx / speed) * maxSpeed;
+        player.vy = (player.vy / speed) * maxSpeed;
       }
 
       // Update facing angle

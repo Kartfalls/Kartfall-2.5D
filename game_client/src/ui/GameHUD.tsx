@@ -60,6 +60,11 @@ export function GameHUD({ room }: GameHUDProps) {
 
   const [muted, setMuted] = useState(() => readAudioSettings().muted);
   const [fps, setFps] = useState<number | null>(null);
+  const [streakBanner, setStreakBanner] = useState<{
+    label: string;
+    playerName: string;
+    id: number;
+  } | null>(null);
   const audioEnabled = isAudioEnabled();
   const mutedRef = useRef(muted);
 
@@ -137,6 +142,19 @@ export function GameHUD({ room }: GameHUDProps) {
       EventBus.off("hud-update", onUpdate);
       EventBus.off("kill-feed", onKill);
     };
+  }, []);
+
+  // ── Streak banner ──
+  useEffect(() => {
+    const onStreak = (data: { label: string; playerName: string; streak: number }) => {
+      const entry = { label: data.label, playerName: data.playerName, id: Date.now() };
+      setStreakBanner(entry);
+      setTimeout(() => {
+        setStreakBanner((prev) => (prev?.id === entry.id ? null : prev));
+      }, 2200);
+    };
+    EventBus.on("streak-event", onStreak);
+    return () => { EventBus.off("streak-event", onStreak); };
   }, []);
 
   // ── FPS counter ──
@@ -335,6 +353,14 @@ export function GameHUD({ room }: GameHUDProps) {
         <div className="hud-respawning">
           <div className="hud-respawning-text">RESPAWNING</div>
           <div className="hud-respawning-sub">prepare to re-enter</div>
+        </div>
+      )}
+
+      {/* ── Kill streak banner ── */}
+      {streakBanner && (
+        <div className="hud-streak-banner">
+          <div className="hud-streak-label">{streakBanner.label}</div>
+          <div className="hud-streak-player">{streakBanner.playerName}</div>
         </div>
       )}
     </div>

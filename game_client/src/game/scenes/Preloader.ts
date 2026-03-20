@@ -16,6 +16,10 @@ import {
   TEX_PICKUP_BULLET,
   TEX_PICKUP_GLOW,
   TEX_PICKUP_CRATE,
+  TEX_PICKUP_SNIPER,
+  TEX_PICKUP_MINE,
+  TEX_PICKUP_SHOCKWAVE,
+  TEX_SHOCKWAVE_RING,
   TEX_PARTICLE_SMOKE,
   TEX_PARTICLE_SPARK,
   TEX_PARTICLE_DUST,
@@ -244,6 +248,10 @@ export class Preloader extends Phaser.Scene {
   create(): void {
     this.createAnimations();
     this.createPickupCrateTexture();
+    this.createSniperPickupTexture();
+    this.createMinePickupTexture();
+    this.createShockwavePickupTexture();
+    this.createShockwaveRingTexture();
     this.scene.start("MainMenu");
   }
 
@@ -440,6 +448,119 @@ export class Preloader extends Phaser.Scene {
     g.strokeRect(1, 1, size - 2, size - 2);
 
     g.generateTexture(TEX_PICKUP_CRATE, size, size);
+    g.destroy();
+  }
+
+  private createSniperPickupTexture(): void {
+    if (this.textures.exists(TEX_PICKUP_SNIPER)) return;
+    const w = 32, h = 32;
+    const g = this.make.graphics({ x: 0, y: 0 });
+
+    // Rifle body — thin horizontal bar
+    g.fillStyle(0xe8e8e8, 1);
+    g.fillRect(2, 13, 28, 6);
+
+    // Stock (left end, thicker)
+    g.fillStyle(0xb8a080, 1);
+    g.fillRect(2, 12, 8, 8);
+
+    // Barrel (right end, thinner)
+    g.fillStyle(0xcccccc, 1);
+    g.fillRect(22, 14, 8, 4);
+
+    // Scope circle (centre)
+    g.lineStyle(2, 0x66ccff, 1);
+    g.strokeCircle(15, 16, 5);
+
+    // Scope crosshairs
+    g.lineStyle(1, 0x66ccff, 0.8);
+    g.lineBetween(15, 11, 15, 21);
+    g.lineBetween(10, 16, 20, 16);
+
+    // Trigger guard
+    g.lineStyle(1, 0x999999, 1);
+    g.strokeRect(10, 19, 5, 4);
+
+    g.generateTexture(TEX_PICKUP_SNIPER, w, h);
+    g.destroy();
+  }
+
+  private createMinePickupTexture(): void {
+    if (this.textures.exists(TEX_PICKUP_MINE)) return;
+    const size = 24;
+    const g = this.make.graphics({ x: 0, y: 0 });
+    const cx = 12, cy = 12, r = 8;
+
+    // Body
+    g.fillStyle(0xcc2222, 1);
+    g.fillCircle(cx, cy, r);
+    g.fillStyle(0xff4444, 1);
+    g.fillCircle(cx - 2, cy - 2, 3); // highlight
+
+    // Spikes (6 directions)
+    g.lineStyle(2, 0xff6666, 1);
+    const spikeLen = 4;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const sx = cx + Math.cos(a) * r;
+      const sy = cy + Math.sin(a) * r;
+      g.lineBetween(sx, sy, cx + Math.cos(a) * (r + spikeLen), cy + Math.sin(a) * (r + spikeLen));
+    }
+
+    // Outline
+    g.lineStyle(1.5, 0x880000, 1);
+    g.strokeCircle(cx, cy, r);
+
+    g.generateTexture(TEX_PICKUP_MINE, size, size);
+    g.destroy();
+  }
+
+  private createShockwavePickupTexture(): void {
+    if (this.textures.exists(TEX_PICKUP_SHOCKWAVE)) return;
+    const size = 28;
+    const g = this.make.graphics({ x: 0, y: 0 });
+    const cx = 14, cy = 14;
+
+    // 3 concentric arcs (top half only, like a wifi / pulse symbol)
+    const arcs = [
+      { r: 4, alpha: 1.0 },
+      { r: 8, alpha: 0.75 },
+      { r: 12, alpha: 0.5 },
+    ];
+    for (const arc of arcs) {
+      g.lineStyle(2, 0x44aaff, arc.alpha);
+      // Draw arc from -135° to -45° (top arc, facing upward)
+      g.beginPath();
+      g.arc(cx, cy + 2, arc.r, Phaser.Math.DegToRad(-150), Phaser.Math.DegToRad(-30), false);
+      g.strokePath();
+    }
+
+    // Center dot
+    g.fillStyle(0x88ddff, 1);
+    g.fillCircle(cx, cy + 2, 2);
+
+    g.generateTexture(TEX_PICKUP_SHOCKWAVE, size, size);
+    g.destroy();
+  }
+
+  private createShockwaveRingTexture(): void {
+    if (this.textures.exists(TEX_SHOCKWAVE_RING)) return;
+    const size = 256;
+    const g = this.make.graphics({ x: 0, y: 0 });
+
+    // Outer ring glow (wider, dimmer)
+    g.lineStyle(6, 0x00eeff, 0.3);
+    g.strokeCircle(128, 128, 120);
+
+    // Main ring
+    g.lineStyle(3, 0x00eeff, 1.0);
+    g.strokeCircle(128, 128, 118);
+
+    // Inner ring
+    g.lineStyle(1.5, 0x88ffff, 0.6);
+    g.strokeCircle(128, 128, 112);
+
+    g.generateTexture(TEX_SHOCKWAVE_RING, size, size);
     g.destroy();
   }
 }

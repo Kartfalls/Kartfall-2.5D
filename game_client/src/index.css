@@ -2910,6 +2910,53 @@ body {
   to { background: rgba(180, 20, 20, 0.18); }
 }
 
+/* Kill streak banner */
+.hud-streak-banner {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 50;
+  animation: streak-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.hud-streak-label {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 5px;
+  color: #ffe066;
+  text-shadow:
+    0 0 20px rgba(255, 200, 0, 0.9),
+    0 0 40px rgba(255, 160, 0, 0.5),
+    0 2px 4px rgba(0, 0, 0, 0.8);
+  text-transform: uppercase;
+  animation: streak-flash 0.4s ease 3;
+}
+
+.hud-streak-player {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: rgba(255, 220, 100, 0.7);
+  text-transform: uppercase;
+}
+
+@keyframes streak-pop {
+  from { opacity: 0; transform: translateX(-50%) scale(0.5); }
+  to   { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
+@keyframes streak-flash {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
 @keyframes respawn-flicker {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.72; }

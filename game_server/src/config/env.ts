@@ -53,6 +53,13 @@ export const env = {
   YELLOW_ENABLED: optional("YELLOW_ENABLED", "true") === "true",
 
   /**
+   * Set to "true" to run on mainnet.
+   * When false (default): faucet endpoint is active, autofund is allowed.
+   * When true: faucet returns 403, autofund is force-disabled regardless of YELLOW_AUTOFUND.
+   */
+  YELLOW_MAINNET: optional("YELLOW_MAINNET", "false") === "true",
+
+  /**
    * Platform's hex-encoded private key (0x-prefixed) for signing.
    * Optional at startup — validated lazily inside getYellowClient().
    */
